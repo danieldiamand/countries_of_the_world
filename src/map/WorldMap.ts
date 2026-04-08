@@ -175,6 +175,22 @@ export class WorldMap {
     ) as unknown as FeatureCollection;
 
     this.features = countriesGeo.features as CountryFeature[];
+
+    // Assign synthetic IDs to features that lack them (Kosovo, etc.)
+    const nameToId: Record<string, string> = {
+      'Kosovo': '-1',
+      'Somaliland': '-2',
+      'N. Cyprus': '-3',
+    };
+    for (const feature of this.features) {
+      if (!feature.id && feature.properties?.name) {
+        const syntheticId = nameToId[feature.properties.name];
+        if (syntheticId) {
+          (feature as any).id = syntheticId;
+        }
+      }
+    }
+
     // Store the combined land for rendering borders
     this.landFeature = topojson.merge(
       topology,
@@ -201,6 +217,10 @@ export class WorldMap {
   resetStates(): void {
     this.countryStates.clear();
     this.render();
+  }
+
+  getCountryState(countryId: string): CountryState {
+    return this.countryStates.get(countryId) || 'default';
   }
 
   getCountryForFeature(feature: CountryFeature): Country | undefined {

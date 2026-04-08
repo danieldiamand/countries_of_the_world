@@ -135,7 +135,7 @@ class App {
         ) {
           // Clear previous selection highlight (keep correct states)
           for (const c of this.engine.remainingCountries) {
-            const currentState = this.getCountryMapState(c.id);
+            const currentState = this.worldMap.getCountryState(c.id);
             if (currentState === 'selected' || currentState === 'highlighted') {
               this.worldMap.setCountryState(c.id, 'default');
             }
@@ -143,7 +143,7 @@ class App {
           this.worldMap.setCountryState(country.id, 'selected');
 
           // For modes that auto-show the country, fly to it
-          if (config.mode === 4 || config.mode === 5) {
+          if (config.mode === 1 || config.mode === 4 || config.mode === 5) {
             this.worldMap.flyTo(country.id, 600);
           }
         }
@@ -177,11 +177,6 @@ class App {
       config.timeLimit ? config.timeLimit * 60 : 0,
       config.timeLimit !== null
     );
-  }
-
-  private getCountryMapState(countryId: string): string {
-    // Access the internal state of the map
-    return (this.worldMap as any).countryStates?.get(countryId) || 'default';
   }
 
   private handleGuess(input: string): void {

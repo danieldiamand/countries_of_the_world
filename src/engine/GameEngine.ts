@@ -381,20 +381,20 @@ export class GameEngine {
     }
   }
 
-  private findNearestUnguessed(_lastCorrect: Country): Country | null {
-    // Simply find the next unguessed in the shuffled pool
-    // For v1, simple sequential; the pool is shuffled so it provides variety
+  private findNearestUnguessed(lastCorrect: Country): Country | null {
     const remaining = this.pool.filter((c) => !this.guessed.has(c.id));
     if (remaining.length === 0) return null;
 
-    // Find the one adjacent in the pool
-    for (let i = 1; i < this.pool.length; i++) {
-      const idx = (this.currentIndex + i) % this.pool.length;
-      if (!this.guessed.has(this.pool[idx].id)) {
-        return this.pool[idx];
-      }
+    // Prefer same continent for geographic flow
+    const sameContinent = remaining.filter(
+      (c) => c.continent === lastCorrect.continent
+    );
+    if (sameContinent.length > 0) {
+      return sameContinent[Math.floor(Math.random() * sameContinent.length)];
     }
-    return remaining[0];
+
+    // Fall back to any remaining
+    return remaining[Math.floor(Math.random() * remaining.length)];
   }
 
   private emitNext(): void {
