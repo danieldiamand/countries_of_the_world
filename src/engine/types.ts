@@ -1,6 +1,6 @@
 import type { Country } from '../data/countries';
 
-export type GameMode = 1 | 2 | 3 | 4 | 5;
+export type GameMode = 1 | 2 | 3 | 4 | 5; // 4 is removed from UI but kept for type compat
 export type QuizVariant = 'free' | 'choice' | 'reverse';
 export type TimeLimit = 15 | 30 | null;
 

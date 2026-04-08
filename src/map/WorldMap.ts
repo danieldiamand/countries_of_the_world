@@ -247,15 +247,16 @@ export class WorldMap {
     const cx = (x0 + x1) / 2;
     const cy = (y0 + y1) / 2;
 
-    // Calculate appropriate zoom level
+    // Calculate appropriate zoom level — keep it gentle, don't zoom in too much
     const scale = Math.min(
-      8,
+      4,
       Math.max(
-        1.5,
-        0.8 / Math.max(dx / this.width, dy / this.height)
+        1.2,
+        0.5 / Math.max(dx / this.width, dy / this.height)
       )
     );
 
+    // Offset slightly from dead center for a more natural feel
     const transform = d3.zoomIdentity
       .translate(this.width / 2, this.height / 2)
       .scale(scale)

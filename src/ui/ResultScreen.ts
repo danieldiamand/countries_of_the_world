@@ -54,9 +54,11 @@ export class ResultScreen {
       `;
     }
 
+    const heading = pct === 100 ? 'Perfect' : pct >= 80 ? 'Great job' : pct >= 50 ? 'Good effort' : 'Keep practicing';
+
     this.container.innerHTML = `
       <div class="results-card">
-        <h2>${pct === 100 ? '🎉 Perfect!' : pct >= 80 ? '🌍 Great Job!' : pct >= 50 ? '👍 Good Effort!' : '📚 Keep Practicing!'}</h2>
+        <h2>${heading}</h2>
         
         <div class="stats-grid">
           <div class="stat-item">
@@ -72,16 +74,16 @@ export class ResultScreen {
             <div class="stat-label">Time</div>
           </div>
           <div class="stat-item">
-            <div class="stat-value">${result.hintsUsed}</div>
-            <div class="stat-label">Hints Used</div>
+            <div class="stat-value hint-color">${result.hintsUsed}</div>
+            <div class="stat-label">Hints used</div>
           </div>
         </div>
 
         ${missedHTML}
 
         <div class="results-actions">
-          <button class="btn-primary" id="play-again">Play Again</button>
-          <button class="btn-secondary" id="change-mode">Change Mode</button>
+          <button class="btn-primary" id="play-again">Play again</button>
+          <button class="btn-secondary" id="change-mode">Change game</button>
         </div>
       </div>
     `;

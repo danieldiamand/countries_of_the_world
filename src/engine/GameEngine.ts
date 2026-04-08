@@ -215,37 +215,13 @@ export class GameEngine {
   useHint(): string | null {
     if (!this.running) return null;
 
-    // If near-miss is active, auto-complete it
-    if (this.nearMissCountry) {
-      const country = this.nearMissCountry;
-      const useCapitals = this.config.mode === 5;
-      const displayAnswer = useCapitals ? country.capital : country.name;
-      this.hintsUsed++;
-      // Treat as correct
-      this.guessed.add(country.id);
-      this.hintRevealed = 0;
-      this.nearMissCountry = null;
-      this.emit({
-        type: 'correct',
-        result: { status: 'correct', country },
-        country,
-        hintText: displayAnswer,
-      });
-      if (this.guessed.size >= this.pool.length) {
-        this.endGame();
-        return displayAnswer;
-      }
-      this.advanceToNext(country);
-      return displayAnswer;
-    }
-
-    // Normal hint: reveal next letter
-    const country =
-      this.config.mode === 2 ? null : this.currentCountry;
-    if (!country) return null;
+    // If near-miss is active, just reveal a letter of that country (don't auto-complete)
+    const hintCountry = this.nearMissCountry ||
+      (this.config.mode === 2 ? null : this.currentCountry);
+    if (!hintCountry) return null;
 
     const useCapitals = this.config.mode === 5;
-    const displayAnswer = useCapitals ? country.capital : country.name;
+    const displayAnswer = useCapitals ? hintCountry.capital : hintCountry.name;
     this.hintRevealed++;
     this.hintsUsed++;
 
@@ -256,7 +232,7 @@ export class GameEngine {
         .slice(this.hintRevealed)
         .replace(/[a-zA-ZÀ-ÿ]/g, '_');
 
-    this.emit({ type: 'hint', hintText: hint, country });
+    this.emit({ type: 'hint', hintText: hint, country: hintCountry });
     return hint;
   }
 
@@ -287,7 +263,9 @@ export class GameEngine {
    * For Mode 1: select a country on the map.
    */
   selectCountry(countryId: string): boolean {
-    if (!this.running || this.config.mode !== 1) return false;
+    if (!this.running) return false;
+    // Allow country selection in Mode 1 (Click & Type) and Capital Quiz free variant
+    if (this.config.mode !== 1 && !(this.config.mode === 5 && this.config.variant === 'free')) return false;
     if (this.guessed.has(countryId)) return false;
 
     const idx = this.pool.findIndex((c) => c.id === countryId);
@@ -385,16 +363,16 @@ export class GameEngine {
     const remaining = this.pool.filter((c) => !this.guessed.has(c.id));
     if (remaining.length === 0) return null;
 
-    // Prefer same continent for geographic flow
+    // Prefer same continent, pick sequentially (pool is pre-shuffled so this is stable)
     const sameContinent = remaining.filter(
       (c) => c.continent === lastCorrect.continent
     );
     if (sameContinent.length > 0) {
-      return sameContinent[Math.floor(Math.random() * sameContinent.length)];
+      return sameContinent[0];
     }
 
-    // Fall back to any remaining
-    return remaining[Math.floor(Math.random() * remaining.length)];
+    // Fall back to first remaining
+    return remaining[0];
   }
 
   private emitNext(): void {

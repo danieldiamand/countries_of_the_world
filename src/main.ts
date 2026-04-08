@@ -5,7 +5,6 @@ import {
   ClickAndTypeMode,
   FreeTypeMode,
   FlagQuizMode,
-  CountryQuizMode,
   CapitalQuizMode,
 } from './modes/adapters';
 import { WorldMap } from './map/WorldMap';
@@ -63,8 +62,10 @@ class App {
     // Create mode adapter
     const adapter = this.createAdapter(config);
 
-    // Set up map click handler for Mode 1
-    if (adapter.requiresMapClick) {
+    // Set up map click handler for modes that need it
+    const enableMapClick = adapter.requiresMapClick ||
+      (config.mode === 5 && config.variant === 'free');
+    if (enableMapClick) {
       this.worldMap.setClickHandler((countryId) => {
         if (this.engine.isRunning) {
           const selected = this.engine.selectCountry(countryId);
@@ -101,7 +102,7 @@ class App {
         this.engine.totalCountries
       );
 
-      // Fly to country for map-visible modes
+      // Fly to country for Free Type mode
       if (config.mode === 2) {
         this.worldMap.flyTo(country.id, 600);
       }
@@ -140,19 +141,19 @@ class App {
               this.worldMap.setCountryState(c.id, 'default');
             }
           }
+
+          // For Mode 1 (click & type): don't pre-select, let user click
+          if (config.mode === 1) {
+            // Don't highlight or fly to any country — user picks
+            return;
+          }
+
           this.worldMap.setCountryState(country.id, 'selected');
 
           // For modes that auto-show the country, fly to it
-          if (config.mode === 1 || config.mode === 4 || config.mode === 5) {
+          if (config.mode === 5) {
             this.worldMap.flyTo(country.id, 600);
           }
-        }
-
-        // For reverse variant with map-related choices
-        if (event.prompt.choiceItems && config.mode === 4) {
-          event.prompt.choiceItems.forEach((c) => {
-            this.worldMap.setCountryState(c.id, 'highlighted');
-          });
         }
       }
     });
@@ -200,41 +201,25 @@ class App {
     const result = this.engine.submitChoice(index);
 
     if (prompt && this.gameHUD) {
-      if (result.status === 'correct') {
-        if (prompt.choices) {
-          const country = prompt.country;
-          if (country) {
-            const correctAnswer =
-              this.lastConfig?.mode === 5 ? country.capital : country.name;
-            const correctIdx = prompt.choices.findIndex(
-              (c) => c === correctAnswer
-            );
-            this.gameHUD.showChoiceResult(correctIdx, index);
-          }
-        } else if (prompt.choiceItems) {
-          const correctIdx = prompt.choiceItems.findIndex(
-            (c) => c.id === prompt.country?.id
+      if (prompt.choices) {
+        const country = prompt.country;
+        if (country) {
+          const correctAnswer =
+            this.lastConfig?.mode === 5 ? country.capital : country.name;
+          const correctIdx = prompt.choices.findIndex(
+            (c) => c === correctAnswer
           );
           this.gameHUD.showChoiceResult(correctIdx, index);
         }
-      } else {
-        if (prompt.choices) {
-          const country = prompt.country;
-          if (country) {
-            const correctAnswer =
-              this.lastConfig?.mode === 5 ? country.capital : country.name;
-            const correctIdx = prompt.choices.findIndex(
-              (c) => c === correctAnswer
-            );
-            this.gameHUD.showChoiceResult(correctIdx, index);
-          }
-        } else if (prompt.choiceItems) {
-          const correctIdx = prompt.choiceItems.findIndex(
-            (c) => c.id === prompt.country?.id
-          );
-          this.gameHUD.showChoiceResult(correctIdx, index);
-        }
-        // Auto-advance after brief delay on wrong choice
+      } else if (prompt.choiceItems) {
+        const correctIdx = prompt.choiceItems.findIndex(
+          (c) => c.id === prompt.country?.id
+        );
+        this.gameHUD.showChoiceResult(correctIdx, index);
+      }
+
+      // Auto-advance after brief delay on wrong choice
+      if (result.status !== 'correct') {
         setTimeout(() => {
           this.engine.skip();
         }, 1200);
@@ -286,8 +271,6 @@ class App {
         return new FreeTypeMode();
       case 3:
         return new FlagQuizMode(config.variant);
-      case 4:
-        return new CountryQuizMode(config.variant);
       case 5:
         return new CapitalQuizMode(config.variant);
       default:

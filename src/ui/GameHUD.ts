@@ -6,7 +6,6 @@ export class GameHUD {
   private topBar: HTMLElement;
   private bottomBar: HTMLElement;
   private promptArea: HTMLElement;
-  private hintDisplay: HTMLElement;
   private nearMissBar: HTMLElement;
   private inputRow: HTMLElement;
   private input: HTMLInputElement;
@@ -23,6 +22,7 @@ export class GameHUD {
   private onChoice: (index: number) => void;
 
   private config: GameConfig;
+  private currentHintText: string | null = null;
 
   constructor(
     parent: HTMLElement,
@@ -71,7 +71,11 @@ export class GameHUD {
     const endBtn = document.createElement('button');
     endBtn.className = 'hud-end-btn';
     endBtn.textContent = 'End';
-    endBtn.addEventListener('click', this.onEnd);
+    endBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onEnd();
+    });
     this.topBar.appendChild(endBtn);
 
     // Bottom area
@@ -83,11 +87,6 @@ export class GameHUD {
     this.promptArea = document.createElement('div');
     this.promptArea.className = 'prompt-area';
     this.bottomBar.appendChild(this.promptArea);
-
-    // Hint display
-    this.hintDisplay = document.createElement('div');
-    this.hintDisplay.className = 'hint-display';
-    this.bottomBar.appendChild(this.hintDisplay);
 
     // Near-miss bar
     this.nearMissBar = document.createElement('div');
@@ -114,11 +113,11 @@ export class GameHUD {
     this.input.spellcheck = false;
     this.inputRow.appendChild(this.input);
 
-    // Hint button
+    // Hint button — minimal text, orange themed
     const hintBtn = document.createElement('button');
-    hintBtn.className = 'icon-btn';
-    hintBtn.innerHTML = '💡';
-    hintBtn.title = 'Hint (reveal a letter)';
+    hintBtn.className = 'hint-btn';
+    hintBtn.textContent = 'Hint';
+    hintBtn.title = 'Reveal a letter';
     hintBtn.addEventListener('click', (e) => {
       e.preventDefault();
       this.onHint();
@@ -126,12 +125,12 @@ export class GameHUD {
     });
     this.inputRow.appendChild(hintBtn);
 
-    // Skip button (not for Mode 2)
+    // Skip button (not for Mode 2) — minimal text
     if (config.mode !== 2) {
       const skipBtn = document.createElement('button');
-      skipBtn.className = 'icon-btn';
-      skipBtn.innerHTML = '→';
-      skipBtn.title = 'Skip';
+      skipBtn.className = 'skip-btn';
+      skipBtn.textContent = 'Skip';
+      skipBtn.title = 'Skip this country';
       skipBtn.addEventListener('click', (e) => {
         e.preventDefault();
         this.onSkip();
@@ -176,8 +175,6 @@ export class GameHUD {
         return 'Type any country name...';
       case 3:
         return 'Name this country...';
-      case 4:
-        return 'Name this country...';
       case 5:
         return 'Type the capital city...';
       default:
@@ -190,17 +187,11 @@ export class GameHUD {
   }
 
   updateTimer(seconds: number, isCountdown: boolean): void {
-    if (isCountdown) {
-      const min = Math.floor(seconds / 60);
-      const sec = seconds % 60;
-      this.timerEl.textContent = `${min}:${sec.toString().padStart(2, '0')}`;
-      if (seconds <= 60) {
-        this.timerEl.style.color = 'var(--color-missed)';
-      }
-    } else {
-      const min = Math.floor(seconds / 60);
-      const sec = seconds % 60;
-      this.timerEl.textContent = `${min}:${sec.toString().padStart(2, '0')}`;
+    const min = Math.floor(seconds / 60);
+    const sec = seconds % 60;
+    this.timerEl.textContent = `${min}:${sec.toString().padStart(2, '0')}`;
+    if (isCountdown && seconds <= 60) {
+      this.timerEl.style.color = 'var(--color-missed)';
     }
   }
 
@@ -213,6 +204,7 @@ export class GameHUD {
     this.choicesRow.style.display = 'none';
     this.inputRow.style.display = 'flex';
     this.hideNearMiss();
+    this.currentHintText = null;
 
     // Flag display
     if (prompt.type === 'flag' && prompt.country) {
@@ -223,7 +215,7 @@ export class GameHUD {
       this.promptArea.appendChild(img);
     }
 
-    // Text display
+    // Text display (no background box, just text)
     if (prompt.text) {
       const textEl = document.createElement('div');
       textEl.className = 'prompt-text';
@@ -266,22 +258,31 @@ export class GameHUD {
         prompt.choiceItems.forEach((country, idx) => {
           const btn = document.createElement('button');
           btn.className = 'choice-btn';
-          btn.textContent = this.config.mode === 5 ? country.name : country.name;
+          btn.textContent = country.name;
           btn.addEventListener('click', () => this.onChoice(idx));
           this.choicesRow.appendChild(btn);
         });
       }
     }
 
-    // Clear input for next question
+    // Clear input and hint state for next question
     this.input.value = '';
-    this.hintDisplay.classList.remove('visible');
+    this.input.placeholder = this.getPlaceholder();
+    this.input.classList.remove('hinted', 'near-miss');
     requestAnimationFrame(() => this.input.focus());
   }
 
+  /**
+   * Wordle-style hint: show revealed letters directly in the input as placeholder-like text.
+   * User can still type — their typing replaces the hint.
+   */
   showHint(hintText: string): void {
-    this.hintDisplay.textContent = hintText;
-    this.hintDisplay.classList.add('visible');
+    this.currentHintText = hintText;
+    // Put hint text in the input as value if user hasn't typed yet
+    if (!this.input.value || this.input.classList.contains('hinted')) {
+      this.input.value = hintText;
+      this.input.classList.add('hinted');
+    }
   }
 
   showNearMiss(suggestion: string): void {
@@ -310,9 +311,9 @@ export class GameHUD {
 
   clearInput(): void {
     this.input.value = '';
-    this.input.classList.remove('near-miss');
-    this.hintDisplay.classList.remove('visible');
+    this.input.classList.remove('near-miss', 'hinted');
     this.nearMissBar.classList.remove('visible');
+    this.currentHintText = null;
     requestAnimationFrame(() => this.input.focus());
   }
 
@@ -324,7 +325,6 @@ export class GameHUD {
       <span class="toast-name">${country.name}</span>
     `;
     this.toastContainer.appendChild(toast);
-
     setTimeout(() => toast.remove(), 2000);
   }
 
