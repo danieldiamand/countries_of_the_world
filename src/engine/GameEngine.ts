@@ -38,12 +38,22 @@ export class GameEngine {
     }
   }
 
+  removeAllListeners(): void {
+    this.listeners.clear();
+  }
+
   private emit(event: GameEvent): void {
     const list = this.listeners.get(event.type);
     if (list) list.forEach((fn) => fn(event));
   }
 
   start(config: GameConfig, adapter: ModeAdapter): void {
+    // Clean up any previous game timer
+    if (this.timerInterval) {
+      clearInterval(this.timerInterval);
+      this.timerInterval = 0;
+    }
+
     this.config = config;
     this.adapter = adapter;
     this.guessed = new Set();

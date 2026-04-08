@@ -88,7 +88,9 @@ class App {
 
     this.gameHUD.setModeLabel(adapter.modeName);
 
-    // Set up engine events
+    // Clear previous engine listeners and set up new ones
+    this.engine.removeAllListeners();
+
     this.engine.on('correct', (event) => {
       const country = event.country!;
       this.worldMap.setCountryState(country.id, 'correct');
