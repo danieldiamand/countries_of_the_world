@@ -1,5 +1,5 @@
 import type { Country } from '../data/countries';
-import type { GameConfig, PromptData, QuizVariant } from '../engine/types';
+import type { GameConfig, PromptData } from '../engine/types';
 
 export class GameHUD {
   private container: HTMLElement;
