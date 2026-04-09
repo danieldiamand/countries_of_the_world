@@ -1,5 +1,5 @@
 import type { Country } from '../data/countries';
-import type { ModeAdapter, PromptData } from '../engine/types';
+import type { ModeAdapter, PromptData, QuizVariant } from '../engine/types';
 
 // ─── Mode 1: Click & Type ───────────────────────────────────────
 export class ClickAndTypeMode implements ModeAdapter {
@@ -75,39 +75,26 @@ function shuffleWithCorrect(
 export class FlagQuizMode implements ModeAdapter {
   readonly requiresMapClick = false;
   readonly modeName = 'Flag Quiz';
-  variant: 'free' | 'choice' | 'reverse';
-  constructor(variant: 'free' | 'choice' | 'reverse') {
+  variant: QuizVariant;
+  constructor(variant: QuizVariant) {
     this.variant = variant;
   }
 
   getPrompt(country: Country, allCountries: Country[]): PromptData {
-    if (this.variant === 'choice') {
-      // Show flag, pick from 3 names
+    if (this.variant === 'multiple-choice') {
       const wrong = pickWrongAnswers(country, allCountries, 2, (c) => c.name);
       const { labels } = shuffleWithCorrect(
-        country.name,
-        country,
-        wrong.labels,
-        wrong.items
+        country.name, country, wrong.labels, wrong.items
       );
       return { type: 'flag', country, choices: labels };
     }
 
-    if (this.variant === 'reverse') {
-      // Show a name, pick from 3 flags
+    if (this.variant === 'match-flag') {
       const wrong = pickWrongAnswers(country, allCountries, 2, (c) => c.name);
       const { items } = shuffleWithCorrect(
-        country.name,
-        country,
-        wrong.labels,
-        wrong.items
+        country.name, country, wrong.labels, wrong.items
       );
-      return {
-        type: 'text',
-        country,
-        text: country.name,
-        choiceItems: items,
-      };
+      return { type: 'text', country, text: country.name, choiceItems: items };
     }
 
     // Free: show flag, type name
@@ -123,108 +110,34 @@ export class FlagQuizMode implements ModeAdapter {
   }
 }
 
-// ─── Mode 4: Country Name Quiz ──────────────────────────────────
-export class CountryQuizMode implements ModeAdapter {
-  readonly requiresMapClick = false;
-  readonly modeName = 'Country Quiz';
-  variant: 'free' | 'choice' | 'reverse';
-  constructor(variant: 'free' | 'choice' | 'reverse') {
-    this.variant = variant;
-  }
-
-  getPrompt(country: Country, allCountries: Country[]): PromptData {
-    if (this.variant === 'choice') {
-      // Highlight country on map, pick from 3 names
-      const wrong = pickWrongAnswers(country, allCountries, 2, (c) => c.name);
-      const { labels } = shuffleWithCorrect(
-        country.name,
-        country,
-        wrong.labels,
-        wrong.items
-      );
-      return { type: 'map-highlight', country, choices: labels };
-    }
-
-    if (this.variant === 'reverse') {
-      // Show a name, pick from 3 highlighted countries
-      const wrong = pickWrongAnswers(country, allCountries, 2, (c) => c.name);
-      const { items } = shuffleWithCorrect(
-        country.name,
-        country,
-        wrong.labels,
-        wrong.items
-      );
-      return {
-        type: 'text',
-        country,
-        text: country.name,
-        choiceItems: items,
-      };
-    }
-
-    // Free: highlight country on map, type its name
-    return { type: 'map-highlight', country };
-  }
-
-  getAnswer(country: Country): string[] {
-    return country.acceptedNames;
-  }
-
-  getDisplayAnswer(country: Country): string {
-    return country.name;
-  }
-}
-
 // ─── Mode 5: Capital Quiz ───────────────────────────────────────
 export class CapitalQuizMode implements ModeAdapter {
   readonly requiresMapClick = false;
   readonly modeName = 'Capital Quiz';
-  variant: 'free' | 'choice' | 'reverse';
-  constructor(variant: 'free' | 'choice' | 'reverse') {
+  variant: QuizVariant;
+  constructor(variant: QuizVariant) {
     this.variant = variant;
   }
 
   getPrompt(country: Country, allCountries: Country[]): PromptData {
-    if (this.variant === 'choice') {
-      // Show country name, pick from 3 capitals
-      const wrong = pickWrongAnswers(
-        country,
-        allCountries,
-        2,
-        (c) => c.capital
-      );
+    if (this.variant === 'multiple-choice') {
+      const wrong = pickWrongAnswers(country, allCountries, 2, (c) => c.capital);
       const { labels } = shuffleWithCorrect(
-        country.capital,
-        country,
-        wrong.labels,
-        wrong.items
+        country.capital, country, wrong.labels, wrong.items
       );
       return { type: 'text', country, text: country.name, choices: labels };
     }
 
-    if (this.variant === 'reverse') {
-      // Show a capital, pick from 3 country names
+    if (this.variant === 'match-flag') {
       const wrong = pickWrongAnswers(country, allCountries, 2, (c) => c.name);
       const { labels } = shuffleWithCorrect(
-        country.name,
-        country,
-        wrong.labels,
-        wrong.items
+        country.name, country, wrong.labels, wrong.items
       );
-      return {
-        type: 'text',
-        country,
-        text: country.capital,
-        choices: labels,
-      };
+      return { type: 'text', country, text: country.capital, choices: labels };
     }
 
     // Free: show country name + highlight on map, type capital
-    return {
-      type: 'map-highlight',
-      country,
-      text: country.name,
-    };
+    return { type: 'map-highlight', country, text: country.name };
   }
 
   getAnswer(country: Country): string[] {

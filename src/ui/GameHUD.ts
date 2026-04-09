@@ -20,9 +20,12 @@ export class GameHUD {
   private onSkip: () => void;
   private onEnd: () => void;
   private onChoice: (index: number) => void;
+  private onRevealNearMiss: (() => void) | null = null;
 
   private config: GameConfig;
-  private currentHintText: string | null = null;
+
+  // Hint state: the locked-in hint prefix (orange, undeletable)
+  private hintPrefix: string = '';
 
   constructor(
     parent: HTMLElement,
@@ -33,6 +36,7 @@ export class GameHUD {
       onSkip: () => void;
       onEnd: () => void;
       onChoice: (index: number) => void;
+      onRevealNearMiss?: () => void;
     }
   ) {
     this.config = config;
@@ -41,6 +45,7 @@ export class GameHUD {
     this.onSkip = callbacks.onSkip;
     this.onEnd = callbacks.onEnd;
     this.onChoice = callbacks.onChoice;
+    this.onRevealNearMiss = callbacks.onRevealNearMiss || null;
 
     this.container = document.createElement('div');
     this.container.className = 'game-hud';
@@ -83,23 +88,23 @@ export class GameHUD {
     this.bottomBar.className = 'hud-bottom';
     this.container.appendChild(this.bottomBar);
 
-    // Prompt area
+    // Prompt area (flags go here, centered)
     this.promptArea = document.createElement('div');
     this.promptArea.className = 'prompt-area';
     this.bottomBar.appendChild(this.promptArea);
 
-    // Near-miss bar
+    // Near-miss bar (clickable)
     this.nearMissBar = document.createElement('div');
     this.nearMissBar.className = 'near-miss-bar';
     this.bottomBar.appendChild(this.nearMissBar);
 
-    // Choices row (for multiple choice variants)
+    // Choices row
     this.choicesRow = document.createElement('div');
     this.choicesRow.className = 'choices-row';
     this.choicesRow.style.display = 'none';
     this.bottomBar.appendChild(this.choicesRow);
 
-    // Input row (for free-type variants)
+    // Input row
     this.inputRow = document.createElement('div');
     this.inputRow.className = 'input-row';
     this.bottomBar.appendChild(this.inputRow);
@@ -113,7 +118,7 @@ export class GameHUD {
     this.input.spellcheck = false;
     this.inputRow.appendChild(this.input);
 
-    // Hint button — minimal text, orange themed
+    // Hint button
     const hintBtn = document.createElement('button');
     hintBtn.className = 'hint-btn';
     hintBtn.textContent = 'Hint';
@@ -125,7 +130,7 @@ export class GameHUD {
     });
     this.inputRow.appendChild(hintBtn);
 
-    // Skip button (not for Mode 2) — minimal text
+    // Skip button (not for Mode 2)
     if (config.mode !== 2) {
       const skipBtn = document.createElement('button');
       skipBtn.className = 'skip-btn';
@@ -144,15 +149,31 @@ export class GameHUD {
       if (e.key === 'Enter') {
         e.preventDefault();
         const val = this.input.value.trim();
-        if (val) {
-          this.onGuess(val);
-        }
+        if (val) this.onGuess(val);
       } else if (e.key === 'Tab') {
         e.preventDefault();
         this.onHint();
       } else if (e.key === 'Escape') {
         e.preventDefault();
         if (config.mode !== 2) this.onSkip();
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        // Prevent deleting the hint prefix
+        if (this.hintPrefix && this.input.selectionStart !== null) {
+          if (e.key === 'Backspace' && this.input.selectionStart <= this.hintPrefix.length) {
+            e.preventDefault();
+          }
+          if (e.key === 'Delete' && this.input.selectionStart !== null && this.input.selectionStart < this.hintPrefix.length) {
+            e.preventDefault();
+          }
+        }
+      }
+    });
+
+    // Prevent selecting/modifying hint prefix
+    this.input.addEventListener('input', () => {
+      if (this.hintPrefix && !this.input.value.startsWith(this.hintPrefix)) {
+        this.input.value = this.hintPrefix;
+        this.input.setSelectionRange(this.hintPrefix.length, this.hintPrefix.length);
       }
     });
 
@@ -163,22 +184,16 @@ export class GameHUD {
       }
     });
 
-    // Auto focus
     requestAnimationFrame(() => this.input.focus());
   }
 
   private getPlaceholder(): string {
     switch (this.config.mode) {
-      case 1:
-        return 'Click a country, then type its name...';
-      case 2:
-        return 'Type any country name...';
-      case 3:
-        return 'Name this country...';
-      case 5:
-        return 'Type the capital city...';
-      default:
-        return 'Type your answer...';
+      case 1: return 'Click a country, then type its name...';
+      case 2: return 'Type any country name...';
+      case 3: return 'Name this country...';
+      case 5: return 'Type the capital city...';
+      default: return 'Type your answer...';
     }
   }
 
@@ -204,7 +219,7 @@ export class GameHUD {
     this.choicesRow.style.display = 'none';
     this.inputRow.style.display = 'flex';
     this.hideNearMiss();
-    this.currentHintText = null;
+    // Don't clear hint prefix here — it persists per-country (restored via restoreHint)
 
     // Flag display
     if (prompt.type === 'flag' && prompt.country) {
@@ -215,7 +230,7 @@ export class GameHUD {
       this.promptArea.appendChild(img);
     }
 
-    // Text display (no background box, just text)
+    // Text display
     if (prompt.text) {
       const textEl = document.createElement('div');
       textEl.className = 'prompt-text';
@@ -223,8 +238,8 @@ export class GameHUD {
       this.promptArea.appendChild(textEl);
     }
 
-    // Multiple choice (choice variant)
-    if (prompt.choices && this.config.variant === 'choice') {
+    // Multiple choice
+    if (prompt.choices && this.config.variant === 'multiple-choice') {
       this.inputRow.style.display = 'none';
       this.choicesRow.style.display = 'flex';
       this.choicesRow.innerHTML = '';
@@ -237,14 +252,13 @@ export class GameHUD {
       });
     }
 
-    // Reverse variant: flag or map choices
-    if (prompt.choiceItems && this.config.variant === 'reverse') {
+    // Match-flag variant
+    if (prompt.choiceItems && this.config.variant === 'match-flag') {
       this.inputRow.style.display = 'none';
       this.choicesRow.style.display = 'flex';
       this.choicesRow.innerHTML = '';
 
       if (this.config.mode === 3) {
-        // Show flags as choices
         prompt.choiceItems.forEach((country, idx) => {
           const img = document.createElement('img');
           img.className = 'flag-choice';
@@ -254,7 +268,6 @@ export class GameHUD {
           this.choicesRow.appendChild(img);
         });
       } else {
-        // Show country names or capitals as text buttons
         prompt.choiceItems.forEach((country, idx) => {
           const btn = document.createElement('button');
           btn.className = 'choice-btn';
@@ -265,55 +278,76 @@ export class GameHUD {
       }
     }
 
-    // Clear input and hint state for next question
-    this.input.value = '';
-    this.input.placeholder = this.getPlaceholder();
-    this.input.classList.remove('hinted', 'near-miss');
     requestAnimationFrame(() => this.input.focus());
   }
 
   /**
-   * Wordle-style hint: show revealed letters directly in the input as placeholder-like text.
-   * User can still type — their typing replaces the hint.
+   * Set hint prefix: the undeletable orange characters at the start of the input.
+   * Called when engine emits 'hint'. Only the revealed chars — no underscores.
    */
   showHint(hintText: string): void {
-    this.currentHintText = hintText;
-    // Put hint text in the input as value if user hasn't typed yet
-    if (!this.input.value || this.input.classList.contains('hinted')) {
+    this.hintPrefix = hintText;
+    this.input.value = hintText;
+    this.input.classList.add('hinted');
+    this.input.setSelectionRange(hintText.length, hintText.length);
+  }
+
+  /**
+   * Restore hint when switching back to a country that already has hints revealed.
+   */
+  restoreHint(hintText: string | null): void {
+    if (hintText) {
+      this.hintPrefix = hintText;
       this.input.value = hintText;
       this.input.classList.add('hinted');
+      this.input.setSelectionRange(hintText.length, hintText.length);
+    } else {
+      this.hintPrefix = '';
+      this.input.value = '';
+      this.input.classList.remove('hinted');
+      this.input.placeholder = this.getPlaceholder();
     }
   }
 
+  /**
+   * Show near-miss bar. The entire bar is clickable and reveals the full answer.
+   * Shows the normalized suggestion (e.g. "Turkey") not the accented form.
+   */
   showNearMiss(suggestion: string): void {
     this.nearMissBar.innerHTML = `
-      Close! Did you mean <span class="suggestion">${suggestion}</span>?
+      <span>Nearly there! Reveal answer?</span>
       <span class="hint-link">Use hint</span>
     `;
     this.nearMissBar.classList.add('visible');
     this.input.classList.add('near-miss');
-    this.nearMissBar.querySelector('.hint-link')?.addEventListener('click', () => {
-      this.onHint();
-      this.input.focus();
-    });
+    // Whole bar is clickable
+    this.nearMissBar.style.cursor = 'pointer';
+    this.nearMissBar.addEventListener('click', this.handleNearMissClick);
   }
+
+  private handleNearMissClick = (): void => {
+    this.onRevealNearMiss?.();
+    this.input.focus();
+  };
 
   hideNearMiss(): void {
     this.nearMissBar.classList.remove('visible');
+    this.nearMissBar.style.cursor = '';
+    this.nearMissBar.removeEventListener('click', this.handleNearMissClick);
     this.input.classList.remove('near-miss');
   }
 
   shakeInput(): void {
     this.input.classList.remove('shake');
-    void this.input.offsetWidth; // force reflow
+    void this.input.offsetWidth;
     this.input.classList.add('shake');
   }
 
   clearInput(): void {
+    this.hintPrefix = '';
     this.input.value = '';
     this.input.classList.remove('near-miss', 'hinted');
     this.nearMissBar.classList.remove('visible');
-    this.currentHintText = null;
     requestAnimationFrame(() => this.input.focus());
   }
 

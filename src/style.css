@@ -100,9 +100,18 @@ html, body {
 
 /* ── Start Screen ─────────────────────────────────────── */
 .start-screen {
-  background: var(--color-bg);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(6px);
   padding: 24px;
   overflow-y: auto;
+}
+
+.start-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 640px;
+  width: 100%;
 }
 
 .start-screen h1 {
@@ -116,18 +125,69 @@ html, body {
 .start-screen .subtitle {
   font-size: 0.9rem;
   color: var(--color-text-muted);
-  margin-bottom: 32px;
+  margin-bottom: 28px;
   font-weight: 400;
 }
 
-/* Start Screen — Dropdown Selectors */
+/* Mode Cards Grid */
+.mode-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 24px;
+}
+
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 20px;
+  background: var(--color-card);
+  border: 1.5px solid var(--color-card-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-sm);
+}
+
+.mode-card:hover {
+  border-color: var(--color-selected);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.mode-card.active {
+  border-color: var(--color-text);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+.mode-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mode-desc {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+/* Start Screen — Options below cards */
+.start-options {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
 .config-row {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
   margin-bottom: 20px;
   width: 100%;
-  max-width: 560px;
 }
 
 .config-group {
@@ -295,15 +355,16 @@ html, body {
   align-items: center;
   justify-content: center;
   gap: 16px;
-  min-height: 80px;
+  min-height: 100px;
+  padding: 12px 0;
 }
 
 .prompt-flag {
-  width: 120px;
-  height: 90px;
+  width: 160px;
+  height: 120px;
   object-fit: contain;
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
   background: var(--color-surface);
 }
 
@@ -684,13 +745,17 @@ html, body {
     font-size: 1.3rem;
   }
 
+  .mode-grid {
+    grid-template-columns: 1fr;
+  }
+
   .config-row {
     flex-direction: column;
   }
 
   .prompt-flag {
-    width: 80px;
-    height: 60px;
+    width: 120px;
+    height: 90px;
   }
 
   .prompt-text {

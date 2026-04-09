@@ -15,7 +15,7 @@ export class GameEngine {
   private config!: GameConfig;
   private adapter!: ModeAdapter;
   private pool: Country[] = [];
-  private guessed: Set<string> = new Set(); // country ids
+  private guessed: Set<string> = new Set();
   private hintRevealed: number = 0;
   private hintsUsed: number = 0;
   private currentIndex: number = 0;
@@ -24,6 +24,12 @@ export class GameEngine {
   private running: boolean = false;
   private listeners: Map<GameEventType, GameEventListener[]> = new Map();
   private nearMissCountry: Country | null = null;
+
+  // Per-country hint state: countryId -> number of revealed chars
+  private hintStates: Map<string, number> = new Map();
+
+  // Centroid lookup for geographic distance (set externally from WorldMap)
+  private centroids: Map<string, [number, number]> = new Map();
 
   on(type: GameEventType, listener: GameEventListener): void {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
@@ -47,8 +53,11 @@ export class GameEngine {
     if (list) list.forEach((fn) => fn(event));
   }
 
+  setCentroids(centroids: Map<string, [number, number]>): void {
+    this.centroids = centroids;
+  }
+
   start(config: GameConfig, adapter: ModeAdapter): void {
-    // Clean up any previous game timer
     if (this.timerInterval) {
       clearInterval(this.timerInterval);
       this.timerInterval = 0;
@@ -61,6 +70,7 @@ export class GameEngine {
     this.hintsUsed = 0;
     this.currentIndex = 0;
     this.nearMissCountry = null;
+    this.hintStates = new Map();
     this.running = true;
 
     // Filter countries by continent
@@ -74,23 +84,23 @@ export class GameEngine {
       const j = Math.floor(Math.random() * (i + 1));
       [filtered[i], filtered[j]] = [filtered[j], filtered[i]];
     }
-    this.pool = filtered;
 
+    // Trim to questionCount if specified
+    if (config.questionCount && config.questionCount < filtered.length) {
+      filtered = filtered.slice(0, config.questionCount);
+    }
+
+    this.pool = filtered;
     this.startTime = Date.now();
 
-    // Timer
-    if (config.timeLimit) {
+    // Timer: for count-based modes (flag/capital with questionCount), always count UP
+    if (config.timeLimit && !config.questionCount) {
       const totalMs = config.timeLimit * 60 * 1000;
       this.timerInterval = window.setInterval(() => {
         const elapsed = Date.now() - this.startTime;
         const remaining = Math.max(0, totalMs - elapsed);
-        this.emit({
-          type: 'tick',
-          timeRemaining: Math.ceil(remaining / 1000),
-        });
-        if (remaining <= 0) {
-          this.endGame();
-        }
+        this.emit({ type: 'tick', timeRemaining: Math.ceil(remaining / 1000) });
+        if (remaining <= 0) this.endGame();
       }, 1000);
     } else {
       // Count up
@@ -135,32 +145,22 @@ export class GameEngine {
     return this.adapter.getPrompt(country, this.pool);
   }
 
-  /**
-   * Submit a guess. For Mode 2 (free type, no specific target),
-   * checks against all unguessed countries.
-   */
   submitGuess(input: string): GuessResult {
-    if (!this.running || !input.trim()) {
-      return { status: 'incorrect' };
-    }
+    if (!this.running || !input.trim()) return { status: 'incorrect' };
 
     const useCapitals = this.config.mode === 5;
 
     // If there's an active near-miss, check against that country first
     if (this.nearMissCountry) {
       const result = checkGuess(input, this.nearMissCountry, useCapitals);
-      if (result.status === 'correct') {
-        return this.handleCorrect(result);
-      }
+      if (result.status === 'correct') return this.handleCorrect(result);
     }
 
     // Mode 2: check against all unguessed
     if (this.config.mode === 2) {
       const remaining = this.remainingCountries;
       const result = checkGuessAgainstAll(input, remaining, useCapitals);
-      if (result.status === 'correct') {
-        return this.handleCorrect(result);
-      }
+      if (result.status === 'correct') return this.handleCorrect(result);
       if (result.status === 'near-miss') {
         this.nearMissCountry = result.country || null;
         this.emit({ type: 'near-miss', result, country: result.country });
@@ -170,15 +170,13 @@ export class GameEngine {
       return result;
     }
 
-    // Modes 1, 3, 4, 5: check against current target
+    // Modes 1, 3, 5: check against current target
     const country = this.currentCountry;
     if (!country) return { status: 'incorrect' };
 
     const result = checkGuess(input, country, useCapitals);
 
-    if (result.status === 'correct') {
-      return this.handleCorrect(result);
-    }
+    if (result.status === 'correct') return this.handleCorrect(result);
 
     if (result.status === 'near-miss') {
       this.nearMissCountry = country;
@@ -197,56 +195,82 @@ export class GameEngine {
     this.nearMissCountry = null;
     this.emit({ type: 'correct', result, country });
 
-    // Check if all done
     if (this.guessed.size >= this.pool.length) {
       this.endGame();
       return result;
     }
 
-    // Advance to next
     this.advanceToNext(country);
     return result;
   }
 
   /**
-   * Use a hint: reveals the next letter of the answer.
-   * If there's a near-miss active, completes the answer.
+   * Use hint: reveals the next letter of the current country's answer.
+   * Hints are per-country and persist when switching between countries.
+   * Returns the hint text with revealed chars.
    */
   useHint(): string | null {
     if (!this.running) return null;
 
-    // If near-miss is active, just reveal a letter of that country (don't auto-complete)
     const hintCountry = this.nearMissCountry ||
       (this.config.mode === 2 ? null : this.currentCountry);
     if (!hintCountry) return null;
 
     const useCapitals = this.config.mode === 5;
     const displayAnswer = useCapitals ? hintCountry.capital : hintCountry.name;
-    this.hintRevealed++;
+
+    // Get current hint level for this country
+    const currentRevealed = this.hintStates.get(hintCountry.id) || 0;
+    const newRevealed = Math.min(currentRevealed + 1, displayAnswer.length);
+    this.hintStates.set(hintCountry.id, newRevealed);
+    this.hintRevealed = newRevealed;
     this.hintsUsed++;
 
-    const revealed = displayAnswer.slice(0, this.hintRevealed);
-    const hint =
-      revealed +
-      displayAnswer
-        .slice(this.hintRevealed)
-        .replace(/[a-zA-ZÀ-ÿ]/g, '_');
-
+    const hint = displayAnswer.slice(0, newRevealed);
     this.emit({ type: 'hint', hintText: hint, country: hintCountry });
     return hint;
   }
 
   /**
-   * Skip the current question in applicable modes.
+   * Reveal the full answer for a near-miss (counts as 1 hint use).
    */
+  revealNearMiss(): string | null {
+    if (!this.running || !this.nearMissCountry) return null;
+
+    const country = this.nearMissCountry;
+    const useCapitals = this.config.mode === 5;
+    const displayAnswer = useCapitals ? country.capital : country.name;
+
+    this.hintStates.set(country.id, displayAnswer.length);
+    this.hintRevealed = displayAnswer.length;
+    this.hintsUsed++;
+
+    this.emit({ type: 'hint', hintText: displayAnswer, country });
+    return displayAnswer;
+  }
+
+  /**
+   * Get the stored hint text for the current country (for restoring after switching).
+   */
+  getHintForCountry(countryId: string): string | null {
+    const revealed = this.hintStates.get(countryId);
+    if (!revealed || revealed === 0) return null;
+
+    const country = this.pool.find((c) => c.id === countryId);
+    if (!country) return null;
+
+    const useCapitals = this.config.mode === 5;
+    const displayAnswer = useCapitals ? country.capital : country.name;
+    return displayAnswer.slice(0, revealed);
+  }
+
   skip(): void {
     if (!this.running) return;
-    if (this.config.mode === 2) return; // Can't skip in free type
+    if (this.config.mode === 2) return;
 
     this.hintRevealed = 0;
     this.nearMissCountry = null;
 
-    // Move current to end
     const current = this.pool[this.currentIndex];
     if (current && !this.guessed.has(current.id)) {
       this.pool.splice(this.currentIndex, 1);
@@ -259,12 +283,8 @@ export class GameEngine {
     this.emitNext();
   }
 
-  /**
-   * For Mode 1: select a country on the map.
-   */
   selectCountry(countryId: string): boolean {
     if (!this.running) return false;
-    // Allow country selection in Mode 1 (Click & Type) and Capital Quiz free variant
     if (this.config.mode !== 1 && !(this.config.mode === 5 && this.config.variant === 'free')) return false;
     if (this.guessed.has(countryId)) return false;
 
@@ -272,15 +292,12 @@ export class GameEngine {
     if (idx < 0) return false;
 
     this.currentIndex = idx;
-    this.hintRevealed = 0;
+    this.hintRevealed = this.hintStates.get(countryId) || 0;
     this.nearMissCountry = null;
     this.emitNext();
     return true;
   }
 
-  /**
-   * End the game early or when time is up.
-   */
   endGame(): GameResult {
     this.running = false;
     if (this.timerInterval) {
@@ -289,12 +306,8 @@ export class GameEngine {
     }
 
     const timeTaken = Math.floor((Date.now() - this.startTime) / 1000);
-    const guessedCountries = this.pool.filter((c) =>
-      this.guessed.has(c.id)
-    );
-    const missedCountries = this.pool.filter(
-      (c) => !this.guessed.has(c.id)
-    );
+    const guessedCountries = this.pool.filter((c) => this.guessed.has(c.id));
+    const missedCountries = this.pool.filter((c) => !this.guessed.has(c.id));
 
     const result: GameResult = {
       correct: guessedCountries.length,
@@ -309,32 +322,15 @@ export class GameEngine {
     return result;
   }
 
-  /**
-   * Get the hint text so far (for displaying partial answer).
-   */
-  getHintText(): string | null {
-    if (this.hintRevealed === 0) return null;
-    const country = this.currentCountry;
-    if (!country) return null;
-    const useCapitals = this.config.mode === 5;
-    const displayAnswer = useCapitals ? country.capital : country.name;
-    const revealed = displayAnswer.slice(0, this.hintRevealed);
-    return (
-      revealed +
-      displayAnswer.slice(this.hintRevealed).replace(/[a-zA-ZÀ-ÿ]/g, '_')
-    );
-  }
-
   private advanceToNext(lastCorrect: Country): void {
     if (this.config.mode === 2) {
-      // In free type, no advancement needed
       this.emitNext();
       return;
     }
 
-    // For Mode 1: try to find nearest unguessed country
+    // For Mode 1: find nearest geographic neighbor using centroids
     if (this.config.mode === 1) {
-      const nearest = this.findNearestUnguessed(lastCorrect);
+      const nearest = this.findNearestGeographic(lastCorrect);
       if (nearest) {
         const idx = this.pool.indexOf(nearest);
         if (idx >= 0) this.currentIndex = idx;
@@ -342,7 +338,6 @@ export class GameEngine {
         this.findNextUnguessed();
       }
     } else {
-      // For modes 3, 4, 5: just go to next in queue
       this.findNextUnguessed();
     }
 
@@ -359,20 +354,37 @@ export class GameEngine {
     }
   }
 
-  private findNearestUnguessed(lastCorrect: Country): Country | null {
+  /**
+   * Find the nearest unguessed country by geographic distance using projected centroids.
+   * Prefers same-continent countries. Within the same continent, picks the closest
+   * by Euclidean distance in projected coordinates (which roughly maps to geographic
+   * proximity, biased slightly rightward/eastward due to the projection).
+   */
+  private findNearestGeographic(lastCorrect: Country): Country | null {
     const remaining = this.pool.filter((c) => !this.guessed.has(c.id));
     if (remaining.length === 0) return null;
 
-    // Prefer same continent, pick sequentially (pool is pre-shuffled so this is stable)
-    const sameContinent = remaining.filter(
-      (c) => c.continent === lastCorrect.continent
-    );
-    if (sameContinent.length > 0) {
-      return sameContinent[0];
+    const lastCentroid = this.centroids.get(lastCorrect.id);
+    if (!lastCentroid) {
+      // Fallback: same continent first, then any
+      const sameContinent = remaining.filter((c) => c.continent === lastCorrect.continent);
+      return sameContinent.length > 0 ? sameContinent[0] : remaining[0];
     }
 
-    // Fall back to first remaining
-    return remaining[0];
+    // Score each remaining country: prefer same continent, closest distance
+    const scored = remaining.map((c) => {
+      const centroid = this.centroids.get(c.id);
+      if (!centroid) return { country: c, score: Infinity };
+      const dx = centroid[0] - lastCentroid[0];
+      const dy = centroid[1] - lastCentroid[1];
+      let dist = Math.sqrt(dx * dx + dy * dy);
+      // Penalize cross-continent jumps
+      if (c.continent !== lastCorrect.continent) dist += 5000;
+      return { country: c, score: dist };
+    });
+
+    scored.sort((a, b) => a.score - b.score);
+    return scored[0].country;
   }
 
   private emitNext(): void {
@@ -382,9 +394,6 @@ export class GameEngine {
     }
   }
 
-  /**
-   * Handle choice selection for multiple-choice variants.
-   */
   submitChoice(choiceIndex: number): GuessResult {
     if (!this.running) return { status: 'incorrect' };
 
@@ -394,35 +403,25 @@ export class GameEngine {
     const prompt = this.getPrompt();
     if (!prompt) return { status: 'incorrect' };
 
-    if (this.config.variant === 'choice' && prompt.choices) {
+    if (this.config.variant === 'multiple-choice' && prompt.choices) {
       const chosen = prompt.choices[choiceIndex];
       if (!chosen) return { status: 'incorrect' };
       const useCapitals = this.config.mode === 5;
       const correctAnswer = useCapitals ? country.capital : country.name;
       if (normalize(chosen) === normalize(correctAnswer)) {
-        const result: GuessResult = { status: 'correct', country };
-        return this.handleCorrect(result);
+        return this.handleCorrect({ status: 'correct', country });
       }
-      this.emit({
-        type: 'incorrect',
-        result: { status: 'incorrect' },
-        country,
-      });
+      this.emit({ type: 'incorrect', result: { status: 'incorrect' }, country });
       return { status: 'incorrect' };
     }
 
-    if (this.config.variant === 'reverse' && prompt.choiceItems) {
+    if (this.config.variant === 'match-flag' && prompt.choiceItems) {
       const chosenCountry = prompt.choiceItems[choiceIndex];
       if (!chosenCountry) return { status: 'incorrect' };
       if (chosenCountry.id === country.id) {
-        const result: GuessResult = { status: 'correct', country };
-        return this.handleCorrect(result);
+        return this.handleCorrect({ status: 'correct', country });
       }
-      this.emit({
-        type: 'incorrect',
-        result: { status: 'incorrect' },
-        country,
-      });
+      this.emit({ type: 'incorrect', result: { status: 'incorrect' }, country });
       return { status: 'incorrect' };
     }
 

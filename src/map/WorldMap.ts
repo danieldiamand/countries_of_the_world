@@ -42,6 +42,10 @@ export class WorldMap {
   private loaded: boolean = false;
   private width: number = 0;
   private height: number = 0;
+  private activeTransition: d3.Transition<HTMLCanvasElement, unknown, null, undefined> | null = null;
+
+  // Cached centroids in projected [x, y] coords
+  private centroids: Map<string, [number, number]> = new Map();
 
   constructor(container: HTMLElement) {
     this.canvas = document.createElement('canvas');
@@ -54,10 +58,10 @@ export class WorldMap {
     this.setupZoom();
     this.setupInteractions();
 
-    // Resize observer
     const ro = new ResizeObserver(() => {
       this.setupSize();
       this.setupProjection();
+      this.computeCentroids();
       this.render();
     });
     ro.observe(container);
@@ -79,7 +83,6 @@ export class WorldMap {
       .geoNaturalEarth1()
       .fitSize([this.width, this.height], { type: 'Sphere' } as any)
       .precision(0.1);
-
     this.path = d3.geoPath().projection(this.projection);
   }
 
@@ -93,14 +96,7 @@ export class WorldMap {
       });
 
     d3.select(this.canvas).call(this.zoom);
-    // Prevent page scroll when over map
-    this.canvas.addEventListener(
-      'wheel',
-      (e) => {
-        e.preventDefault();
-      },
-      { passive: false }
-    );
+    this.canvas.addEventListener('wheel', (e) => { e.preventDefault(); }, { passive: false });
   }
 
   private setupInteractions(): void {
@@ -122,7 +118,6 @@ export class WorldMap {
       }
     });
 
-    // Touch support for click
     let touchStart: { x: number; y: number } | null = null;
     this.canvas.addEventListener('touchstart', (e) => {
       if (e.touches.length === 1) {
@@ -130,13 +125,11 @@ export class WorldMap {
         touchStart = { x: touch.clientX, y: touch.clientY };
       }
     });
-
     this.canvas.addEventListener('touchend', (e) => {
       if (touchStart && e.changedTouches.length === 1) {
         const touch = e.changedTouches[0];
         const dx = touch.clientX - touchStart.x;
         const dy = touch.clientY - touchStart.y;
-        // Only treat as click if didn't move much
         if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
           const rect = this.canvas.getBoundingClientRect();
           const x = touch.clientX - rect.left;
@@ -152,17 +145,44 @@ export class WorldMap {
   }
 
   private hitTest(px: number, py: number): CountryFeature | null {
-    // Invert the zoom transform then the projection
     const [tx, ty] = this.currentTransform.invert([px, py]);
     const coords = this.projection.invert?.([tx, ty]);
     if (!coords) return null;
-
     for (const feature of this.features) {
-      if (d3.geoContains(feature as any, coords)) {
-        return feature;
-      }
+      if (d3.geoContains(feature as any, coords)) return feature;
     }
     return null;
+  }
+
+  private computeCentroids(): void {
+    this.centroids.clear();
+
+    // Countries with overseas territories whose map centroids would be misleading.
+    // We override with approximate lon/lat of the metropolitan territory, then project.
+    const CENTROID_OVERRIDES: Record<string, [number, number]> = {
+      '250': [2.5, 46.5],   // France → metropolitan France, not French Guiana
+      '840': [-98, 39],     // USA → contiguous US, not pulled by Alaska/Hawaii
+      '528': [5.5, 52.3],   // Netherlands → European Netherlands
+    };
+
+    for (const feature of this.features) {
+      if (!feature.id) continue;
+      const id = feature.id.toString();
+
+      const override = CENTROID_OVERRIDES[id];
+      if (override) {
+        const projected = this.projection(override);
+        if (projected) {
+          this.centroids.set(id, [projected[0], projected[1]]);
+          continue;
+        }
+      }
+
+      const bounds = this.path.bounds(feature as any);
+      if (!bounds) continue;
+      const [[x0, y0], [x1, y1]] = bounds;
+      this.centroids.set(id, [(x0 + x1) / 2, (y0 + y1) / 2]);
+    }
   }
 
   async load(): Promise<void> {
@@ -176,7 +196,6 @@ export class WorldMap {
 
     this.features = countriesGeo.features as CountryFeature[];
 
-    // Assign synthetic IDs to features that lack them (Kosovo, etc.)
     const nameToId: Record<string, string> = {
       'Kosovo': '-1',
       'Somaliland': '-2',
@@ -185,19 +204,17 @@ export class WorldMap {
     for (const feature of this.features) {
       if (!feature.id && feature.properties?.name) {
         const syntheticId = nameToId[feature.properties.name];
-        if (syntheticId) {
-          (feature as any).id = syntheticId;
-        }
+        if (syntheticId) (feature as any).id = syntheticId;
       }
     }
 
-    // Store the combined land for rendering borders
     this.landFeature = topojson.merge(
       topology,
       (topology.objects.countries as any).geometries
     ) as unknown as Feature<Geometry>;
 
     this.loaded = true;
+    this.computeCentroids();
     this.render();
   }
 
@@ -229,49 +246,103 @@ export class WorldMap {
   }
 
   /**
-   * Fly to a specific country with animation.
+   * Get projected centroid for a country (for geographic distance calculations).
+   */
+  getCentroid(countryId: string): [number, number] | null {
+    return this.centroids.get(countryId) || null;
+  }
+
+  /**
+   * Get all centroids map.
+   */
+  getAllCentroids(): Map<string, [number, number]> {
+    return this.centroids;
+  }
+
+  /**
+   * Smart fly-to: only pans if the country isn't already reasonably visible.
+   * Uses a "dead zone" — if the country centroid is within the inner 60% of the
+   * screen and the country bounding box fits on screen at current zoom, skip the pan.
+   * Animation is interruptible: calling flyTo again cancels any in-progress transition.
    */
   flyTo(countryId: string, duration: number = 750): void {
-    const feature = this.features.find(
-      (f) => f.id?.toString() === countryId
-    );
+    const feature = this.features.find((f) => f.id?.toString() === countryId);
     if (!feature || !this.path) return;
 
-    // Compute the bounding box of the country in projected coordinates
+    // Cancel any in-progress transition
+    d3.select(this.canvas).interrupt();
+
+    // Use overridden centroid if available, else compute from bounds
+    const storedCentroid = this.centroids.get(countryId);
     const bounds = this.path.bounds(feature as any);
     if (!bounds) return;
 
-    const [[x0, y0], [x1, y1]] = bounds;
-    const dx = x1 - x0;
-    const dy = y1 - y0;
-    const cx = (x0 + x1) / 2;
-    const cy = (y0 + y1) / 2;
+    const [[bx0, by0], [bx1, by1]] = bounds;
+    const cx = storedCentroid ? storedCentroid[0] : (bx0 + bx1) / 2;
+    const cy = storedCentroid ? storedCentroid[1] : (by0 + by1) / 2;
 
-    // Calculate appropriate zoom level — keep it gentle, don't zoom in too much
+    // Use centroid-based virtual bounds for countries with overseas territories
+    // (so we don't zoom out to show French Guiana when targeting France)
+    const OVERSEAS_IDS = new Set(['250', '840', '528']);
+    let dx: number, dy: number;
+    if (OVERSEAS_IDS.has(countryId)) {
+      // Use a modest virtual size around the centroid
+      dx = this.width * 0.15;
+      dy = this.height * 0.15;
+    } else {
+      dx = bx1 - bx0;
+      dy = by1 - by0;
+    }
+
+    // Where is the country centroid in *screen* coordinates right now?
+    const [screenX, screenY] = this.currentTransform.apply([cx, cy]);
+
+    // Dead zone: inner 60% of the viewport
+    const marginX = this.width * 0.2;
+    const marginY = this.height * 0.2;
+    const inDeadZone =
+      screenX > marginX &&
+      screenX < this.width - marginX &&
+      screenY > marginY &&
+      screenY < this.height - marginY;
+
+    // Check screen-space size of the country
+    const [screenX0, screenY0] = this.currentTransform.apply([bx0, by0]);
+    const [screenX1, screenY1] = this.currentTransform.apply([bx1, by1]);
+    const screenDx = Math.abs(screenX1 - screenX0);
+    const screenDy = Math.abs(screenY1 - screenY0);
+    const reasonableSize =
+      screenDx > 15 && screenDy > 10 &&
+      screenDx < this.width * 0.8 && screenDy < this.height * 0.8;
+
+    // If already visible and in dead zone, don't pan
+    if (inDeadZone && reasonableSize) {
+      return;
+    }
+
+    // Calculate a gentle zoom level — cap at 4x, at least 1.2
     const scale = Math.min(
       4,
-      Math.max(
-        1.2,
-        0.5 / Math.max(dx / this.width, dy / this.height)
-      )
+      Math.max(1.2, 0.5 / Math.max(dx / this.width, dy / this.height))
     );
 
-    // Offset slightly from dead center for a more natural feel
+    // Don't zoom IN past the current zoom level (avoid jarring zoom-in when only pan needed)
+    const targetScale = Math.max(scale, this.currentTransform.k);
+
     const transform = d3.zoomIdentity
       .translate(this.width / 2, this.height / 2)
-      .scale(scale)
+      .scale(targetScale)
       .translate(-cx, -cy);
 
     d3.select(this.canvas)
       .transition()
       .duration(duration)
+      .ease(d3.easeCubicInOut)
       .call(this.zoom.transform as any, transform);
   }
 
-  /**
-   * Reset the zoom to show the full world.
-   */
   resetZoom(duration: number = 500): void {
+    d3.select(this.canvas).interrupt();
     d3.select(this.canvas)
       .transition()
       .duration(duration)
@@ -286,13 +357,11 @@ export class WorldMap {
     ctx.save();
     ctx.clearRect(0, 0, width, height);
 
-    // Apply zoom transform
     ctx.translate(this.currentTransform.x, this.currentTransform.y);
     ctx.scale(this.currentTransform.k, this.currentTransform.k);
 
     const pathGen = d3.geoPath().projection(this.projection).context(ctx);
 
-    // Draw each country
     for (const feature of this.features) {
       const id = feature.id?.toString() || '';
       const state = this.countryStates.get(id) || 'default';
@@ -301,25 +370,15 @@ export class WorldMap {
       ctx.beginPath();
       pathGen(feature as any);
 
-      // Fill color based on state
-      if (state === 'correct') {
-        ctx.fillStyle = MAP_COLORS.correct;
-      } else if (state === 'hinted') {
-        ctx.fillStyle = MAP_COLORS.hinted;
-      } else if (state === 'selected') {
-        ctx.fillStyle = MAP_COLORS.selected;
-      } else if (state === 'highlighted') {
-        ctx.fillStyle = MAP_COLORS.highlighted;
-      } else if (state === 'missed') {
-        ctx.fillStyle = MAP_COLORS.missed;
-      } else if (isHovered) {
-        ctx.fillStyle = MAP_COLORS.hover;
-      } else {
-        ctx.fillStyle = MAP_COLORS.land;
-      }
+      if (state === 'correct') ctx.fillStyle = MAP_COLORS.correct;
+      else if (state === 'hinted') ctx.fillStyle = MAP_COLORS.hinted;
+      else if (state === 'selected') ctx.fillStyle = MAP_COLORS.selected;
+      else if (state === 'highlighted') ctx.fillStyle = MAP_COLORS.highlighted;
+      else if (state === 'missed') ctx.fillStyle = MAP_COLORS.missed;
+      else if (isHovered) ctx.fillStyle = MAP_COLORS.hover;
+      else ctx.fillStyle = MAP_COLORS.land;
       ctx.fill();
 
-      // Border
       ctx.strokeStyle = MAP_COLORS.border;
       ctx.lineWidth = 0.5 / this.currentTransform.k;
       ctx.stroke();

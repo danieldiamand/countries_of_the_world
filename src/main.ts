@@ -62,7 +62,10 @@ class App {
     // Create mode adapter
     const adapter = this.createAdapter(config);
 
-    // Set up map click handler for modes that need it
+    // Pass centroids to engine for geographic nearest-neighbor
+    this.engine.setCentroids(this.worldMap.getAllCentroids());
+
+    // Set up map click handler
     const enableMapClick = adapter.requiresMapClick ||
       (config.mode === 5 && config.variant === 'free');
     if (enableMapClick) {
@@ -71,11 +74,26 @@ class App {
           const selected = this.engine.selectCountry(countryId);
           if (selected) {
             this.worldMap.setCountryState(countryId, 'selected');
+            // Restore hint state if this country had hints
+            const hint = this.engine.getHintForCountry(countryId);
+            this.gameHUD?.restoreHint(hint);
+            // Fly to the clicked country
+            this.worldMap.flyTo(countryId, 600);
           }
         }
       });
     } else {
-      this.worldMap.setClickHandler(() => {}); // no-op
+      this.worldMap.setClickHandler((countryId) => {
+        // Click-to-fly: clicking a country flies to it even in non-click modes
+        if (this.engine.isRunning && (config.mode === 2)) {
+          this.worldMap.flyTo(countryId, 600);
+        }
+      });
+    }
+
+    // Preload flag images for flag-based modes
+    if (config.mode === 3) {
+      this.preloadFlags();
     }
 
     // Create HUD
@@ -85,6 +103,7 @@ class App {
       onSkip: () => this.handleSkip(),
       onEnd: () => this.handleEnd(),
       onChoice: (index) => this.handleChoice(index),
+      onRevealNearMiss: () => this.handleRevealNearMiss(),
     });
 
     this.gameHUD.setModeLabel(adapter.modeName);
@@ -102,7 +121,7 @@ class App {
         this.engine.totalCountries
       );
 
-      // Fly to country for Free Type mode
+      // Fly to country for Free Type mode (so user sees which one they got)
       if (config.mode === 2) {
         this.worldMap.flyTo(country.id, 600);
       }
@@ -128,13 +147,12 @@ class App {
       if (event.prompt) {
         this.gameHUD?.updatePrompt(event.prompt);
 
-        // Handle map highlighting
         const country = event.prompt.country;
         if (
           country &&
           (event.prompt.type === 'map-highlight' || event.prompt.type === 'click')
         ) {
-          // Clear previous selection highlight (keep correct states)
+          // Clear previous selection highlights (keep correct states)
           for (const c of this.engine.remainingCountries) {
             const currentState = this.worldMap.getCountryState(c.id);
             if (currentState === 'selected' || currentState === 'highlighted') {
@@ -142,27 +160,37 @@ class App {
             }
           }
 
-          // For Mode 1 (click & type): don't pre-select, let user click
+          // Mode 1 (click & type): highlight auto-advanced country + fly to it
           if (config.mode === 1) {
-            // Don't highlight or fly to any country — user picks
+            this.worldMap.setCountryState(country.id, 'highlighted');
+            this.worldMap.flyTo(country.id, 600);
+            // Restore hint for this country if it had one
+            const hint = this.engine.getHintForCountry(country.id);
+            this.gameHUD?.restoreHint(hint);
             return;
           }
 
           this.worldMap.setCountryState(country.id, 'selected');
 
-          // For modes that auto-show the country, fly to it
+          // For capital quiz free mode, fly to the country
           if (config.mode === 5) {
             this.worldMap.flyTo(country.id, 600);
           }
+        }
+
+        // For flag/capital quiz sequential modes, restore hints
+        if (country && (config.mode === 3 || config.mode === 5)) {
+          const hint = this.engine.getHintForCountry(country.id);
+          this.gameHUD?.restoreHint(hint);
         }
       }
     });
 
     this.engine.on('tick', (event) => {
-      this.gameHUD?.updateTimer(
-        event.timeRemaining || 0,
-        config.timeLimit !== null
-      );
+      const seconds = event.timeRemaining || 0;
+      // If questionCount is set, timer always counts up (no countdown)
+      const isCountdown = config.timeLimit !== null && !config.questionCount;
+      this.gameHUD?.updateTimer(seconds, isCountdown);
     });
 
     this.engine.on('end', (event) => {
@@ -174,10 +202,13 @@ class App {
     // Start the engine
     this.engine.start(config, adapter);
     this.gameHUD.updateScore(0, this.engine.totalCountries);
-    this.gameHUD.updateTimer(
-      config.timeLimit ? config.timeLimit * 60 : 0,
-      config.timeLimit !== null
-    );
+
+    // Initial timer display
+    if (config.timeLimit && !config.questionCount) {
+      this.gameHUD.updateTimer(config.timeLimit * 60, true);
+    } else {
+      this.gameHUD.updateTimer(0, false);
+    }
   }
 
   private handleGuess(input: string): void {
@@ -194,6 +225,10 @@ class App {
 
   private handleEnd(): void {
     this.engine.endGame();
+  }
+
+  private handleRevealNearMiss(): void {
+    this.engine.revealNearMiss();
   }
 
   private handleChoice(index: number): void {
@@ -275,6 +310,17 @@ class App {
         return new CapitalQuizMode(config.variant);
       default:
         return new ClickAndTypeMode();
+    }
+  }
+
+  /**
+   * Preload flag SVGs so they appear instantly during the quiz.
+   */
+  private preloadFlags(): void {
+    const pool = this.engine.remainingCountries;
+    for (const country of pool) {
+      const img = new Image();
+      img.src = `/flags/${country.alpha2}.svg`;
     }
   }
 }

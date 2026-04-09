@@ -1,14 +1,16 @@
 import type { Country } from '../data/countries';
 
-export type GameMode = 1 | 2 | 3 | 4 | 5; // 4 is removed from UI but kept for type compat
-export type QuizVariant = 'free' | 'choice' | 'reverse';
+export type GameMode = 1 | 2 | 3 | 5;
+export type QuizVariant = 'free' | 'multiple-choice' | 'match-flag';
 export type TimeLimit = 15 | 30 | null;
+export type QuestionCount = 10 | 25 | 50 | 100 | null; // null = all
 
 export interface GameConfig {
   mode: GameMode;
   continent: string; // 'World' or specific continent name
   timeLimit: TimeLimit;
   variant: QuizVariant;
+  questionCount: QuestionCount; // for Flag/Capital quiz modes
 }
 
 export type GuessStatus = 'correct' | 'near-miss' | 'incorrect';
@@ -16,7 +18,7 @@ export type GuessStatus = 'correct' | 'near-miss' | 'incorrect';
 export interface GuessResult {
   status: GuessStatus;
   country?: Country;
-  suggestion?: string;
+  suggestion?: string; // display name suggestion for near-miss
   distance?: number;
 }
 
@@ -33,8 +35,8 @@ export interface PromptData {
   type: 'flag' | 'map-highlight' | 'text' | 'click';
   country?: Country;
   text?: string;
-  choices?: string[];      // for 'choice' variant
-  choiceItems?: Country[]; // for 'reverse' variant
+  choices?: string[];      // for 'multiple-choice' variant
+  choiceItems?: Country[]; // for 'match-flag' variant
 }
 
 export interface ModeAdapter {

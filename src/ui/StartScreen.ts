@@ -1,5 +1,5 @@
 import { continents } from '../data/countries';
-import type { GameConfig, GameMode, QuizVariant, TimeLimit } from '../engine/types';
+import type { GameConfig, GameMode, QuizVariant, TimeLimit, QuestionCount } from '../engine/types';
 
 interface ModeOption {
   id: GameMode;
@@ -8,16 +8,16 @@ interface ModeOption {
 }
 
 const MODES: ModeOption[] = [
-  { id: 1, name: 'Click & Type', desc: 'Click a country on the map, type its name' },
+  { id: 1, name: 'Click & Type', desc: 'Click a country on the map, then type its name' },
   { id: 2, name: 'Free Type', desc: 'Type any country name — no clicking needed' },
-  { id: 3, name: 'Flag Quiz', desc: 'See a flag, name the country' },
-  { id: 5, name: 'Capital Quiz', desc: 'See a country name, type its capital' },
+  { id: 3, name: 'Flag Quiz', desc: 'See a flag and identify the country' },
+  { id: 5, name: 'Capital Quiz', desc: 'Name the capital city of each country' },
 ];
 
 const VARIANT_DESCRIPTIONS: Record<QuizVariant, string> = {
   free: 'Type the answer yourself',
-  choice: 'Pick the correct answer from three options',
-  reverse: 'Given the answer, match it to the right prompt',
+  'multiple-choice': 'Choose the correct answer from three options',
+  'match-flag': 'See three flags, pick the right one',
 };
 
 export class StartScreen {
@@ -27,11 +27,10 @@ export class StartScreen {
   private selectedContinent: string = 'World';
   private selectedTime: TimeLimit = null;
   private selectedVariant: QuizVariant = 'free';
+  private selectedCount: QuestionCount = null;
 
   // DOM refs for stable updates
-  private modeDescEl: HTMLElement | null = null;
-  private variantRow: HTMLElement | null = null;
-  private variantDescEl: HTMLElement | null = null;
+  private optionsArea: HTMLElement | null = null;
 
   constructor(
     parent: HTMLElement,
@@ -44,100 +43,50 @@ export class StartScreen {
     this.render();
   }
 
-  show(): void {
-    this.container.classList.remove('hidden');
-  }
-
-  hide(): void {
-    this.container.classList.add('hidden');
-  }
+  show(): void { this.container.classList.remove('hidden'); }
+  hide(): void { this.container.classList.add('hidden'); }
 
   private render(): void {
     this.container.innerHTML = '';
 
+    const inner = document.createElement('div');
+    inner.className = 'start-inner';
+    this.container.appendChild(inner);
+
     const h1 = document.createElement('h1');
     h1.textContent = 'Countries of the World';
-    this.container.appendChild(h1);
+    inner.appendChild(h1);
 
     const sub = document.createElement('p');
     sub.className = 'subtitle';
     sub.textContent = 'Test your geography knowledge';
-    this.container.appendChild(sub);
+    inner.appendChild(sub);
 
-    // Row 1: Game type + Region
-    const row1 = document.createElement('div');
-    row1.className = 'config-row';
-    this.container.appendChild(row1);
+    // Mode cards grid
+    const grid = document.createElement('div');
+    grid.className = 'mode-grid';
+    inner.appendChild(grid);
 
-    // Game type dropdown
-    const modeGroup = this.createSelect(
-      'Game type',
-      MODES.map((m) => ({ value: String(m.id), label: m.name })),
-      String(this.selectedMode),
-      (val) => {
-        this.selectedMode = parseInt(val) as GameMode;
-        this.updateModeDesc();
-        this.updateVariantVisibility();
-      },
-      MODES.find((m) => m.id === this.selectedMode)?.desc
-    );
-    row1.appendChild(modeGroup.group);
-    this.modeDescEl = modeGroup.descEl;
+    for (const mode of MODES) {
+      const card = document.createElement('div');
+      card.className = 'mode-card' + (mode.id === this.selectedMode ? ' active' : '');
+      card.innerHTML = `
+        <span class="mode-name">${mode.name}</span>
+        <span class="mode-desc">${mode.desc}</span>
+      `;
+      card.addEventListener('click', () => {
+        this.selectedMode = mode.id;
+        this.updateModeCards(grid);
+        this.renderOptions();
+      });
+      grid.appendChild(card);
+    }
 
-    // Region dropdown
-    const regionOptions = [
-      { value: 'World', label: 'World' },
-      ...continents.map((c) => ({ value: c, label: c })),
-    ];
-    const regionGroup = this.createSelect(
-      'Region',
-      regionOptions,
-      this.selectedContinent,
-      (val) => { this.selectedContinent = val; }
-    );
-    row1.appendChild(regionGroup.group);
-
-    // Row 2: Time + Quiz style (variant)
-    const row2 = document.createElement('div');
-    row2.className = 'config-row';
-    this.container.appendChild(row2);
-
-    // Time dropdown
-    const timeOptions = [
-      { value: 'null', label: 'Unlimited' },
-      { value: '15', label: '15 minutes' },
-      { value: '30', label: '30 minutes' },
-    ];
-    const timeGroup = this.createSelect(
-      'Time limit',
-      timeOptions,
-      this.selectedTime === null ? 'null' : String(this.selectedTime),
-      (val) => {
-        this.selectedTime = val === 'null' ? null : (parseInt(val) as TimeLimit);
-      }
-    );
-    row2.appendChild(timeGroup.group);
-
-    // Variant dropdown (only for modes ≥ 3)
-    const variantOptions = [
-      { value: 'free', label: 'Type answer' },
-      { value: 'choice', label: 'Pick from 3' },
-      { value: 'reverse', label: 'Reverse match' },
-    ];
-    const variantGroup = this.createSelect(
-      'Quiz style',
-      variantOptions,
-      this.selectedVariant,
-      (val) => {
-        this.selectedVariant = val as QuizVariant;
-        this.updateVariantDesc();
-      },
-      VARIANT_DESCRIPTIONS[this.selectedVariant]
-    );
-    this.variantRow = variantGroup.group;
-    this.variantDescEl = variantGroup.descEl;
-    row2.appendChild(variantGroup.group);
-    this.updateVariantVisibility();
+    // Options area (dropdowns below cards)
+    this.optionsArea = document.createElement('div');
+    this.optionsArea.className = 'start-options';
+    inner.appendChild(this.optionsArea);
+    this.renderOptions();
 
     // Start button
     const startBtn = document.createElement('button');
@@ -149,18 +98,81 @@ export class StartScreen {
         continent: this.selectedContinent,
         timeLimit: this.selectedTime,
         variant: this.selectedVariant,
+        questionCount: this.selectedCount,
       });
     });
-    this.container.appendChild(startBtn);
+    inner.appendChild(startBtn);
   }
 
-  private createSelect(
+  private updateModeCards(grid: HTMLElement): void {
+    grid.querySelectorAll('.mode-card').forEach((card, idx) => {
+      const mode = MODES[idx];
+      card.classList.toggle('active', mode.id === this.selectedMode);
+    });
+  }
+
+  private renderOptions(): void {
+    if (!this.optionsArea) return;
+    this.optionsArea.innerHTML = '';
+
+    const row = document.createElement('div');
+    row.className = 'config-row';
+    this.optionsArea.appendChild(row);
+
+    // Region
+    const regionOptions = [
+      { value: 'World', label: 'World' },
+      ...continents.map((c) => ({ value: c, label: c })),
+    ];
+    row.appendChild(this.makeSelect('Region', regionOptions, this.selectedContinent, (v) => {
+      this.selectedContinent = v;
+    }));
+
+    // Show count selector for Flag Quiz / Capital Quiz
+    if (this.selectedMode === 3 || this.selectedMode === 5) {
+      const countOptions = [
+        { value: 'null', label: 'All countries' },
+        { value: '10', label: '10 questions' },
+        { value: '25', label: '25 questions' },
+        { value: '50', label: '50 questions' },
+        { value: '100', label: '100 questions' },
+      ];
+      row.appendChild(this.makeSelect('Questions', countOptions,
+        this.selectedCount === null ? 'null' : String(this.selectedCount),
+        (v) => { this.selectedCount = v === 'null' ? null : parseInt(v) as QuestionCount; }
+      ));
+
+      // Variant (only for flag/capital)
+      const variantOptions = [
+        { value: 'free', label: 'Type answer' },
+        { value: 'multiple-choice', label: 'Multiple choice' },
+        { value: 'match-flag', label: 'Match the flag' },
+      ];
+      row.appendChild(this.makeSelect('Style', variantOptions, this.selectedVariant,
+        (v) => { this.selectedVariant = v as QuizVariant; },
+        VARIANT_DESCRIPTIONS[this.selectedVariant]
+      ));
+    } else {
+      // Time limit (for click & type / free type)
+      const timeOptions = [
+        { value: 'null', label: 'Unlimited' },
+        { value: '15', label: '15 minutes' },
+        { value: '30', label: '30 minutes' },
+      ];
+      row.appendChild(this.makeSelect('Time limit', timeOptions,
+        this.selectedTime === null ? 'null' : String(this.selectedTime),
+        (v) => { this.selectedTime = v === 'null' ? null : parseInt(v) as TimeLimit; }
+      ));
+    }
+  }
+
+  private makeSelect(
     label: string,
     options: { value: string; label: string }[],
     currentValue: string,
     onChange: (value: string) => void,
     description?: string
-  ): { group: HTMLElement; descEl: HTMLElement } {
+  ): HTMLElement {
     const group = document.createElement('div');
     group.className = 'config-group';
 
@@ -181,32 +193,14 @@ export class StartScreen {
     select.addEventListener('change', () => onChange(select.value));
     group.appendChild(select);
 
-    const descEl = document.createElement('div');
-    descEl.className = 'mode-description';
-    descEl.textContent = description || '';
-    group.appendChild(descEl);
-
-    return { group, descEl };
-  }
-
-  private updateModeDesc(): void {
-    if (this.modeDescEl) {
-      const mode = MODES.find((m) => m.id === this.selectedMode);
-      this.modeDescEl.textContent = mode?.desc || '';
+    if (description) {
+      const descEl = document.createElement('div');
+      descEl.className = 'mode-description';
+      descEl.textContent = description;
+      group.appendChild(descEl);
     }
-  }
 
-  private updateVariantVisibility(): void {
-    if (this.variantRow) {
-      this.variantRow.style.display = this.selectedMode >= 3 ? 'flex' : 'none';
-    }
-  }
-
-  private updateVariantDesc(): void {
-    if (this.variantDescEl) {
-      this.variantDescEl.textContent = VARIANT_DESCRIPTIONS[this.selectedVariant] || '';
-      this.variantDescEl.className = 'variant-description';
-    }
+    return group;
   }
 
   dispose(): void {
