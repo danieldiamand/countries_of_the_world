@@ -14,12 +14,6 @@ const MODES: ModeOption[] = [
   { id: 5, name: 'Capital Quiz', desc: 'Name the capital city of each country' },
 ];
 
-const VARIANT_DESCRIPTIONS: Record<QuizVariant, string> = {
-  free: 'Type the answer yourself',
-  'multiple-choice': 'Choose the correct answer from three options',
-  'match-flag': 'See three flags, pick the right one',
-};
-
 export class StartScreen {
   private container: HTMLElement;
   private onStart: (config: GameConfig) => void;
@@ -143,14 +137,16 @@ export class StartScreen {
       ));
 
       // Variant (only for flag/capital)
-      const variantOptions = [
+      const variantOptions: { value: string; label: string }[] = [
         { value: 'free', label: 'Type answer' },
         { value: 'multiple-choice', label: 'Multiple choice' },
-        { value: 'match-flag', label: 'Match the flag' },
       ];
+      // Only show match-flag for Flag Quiz (not Capital Quiz)
+      if (this.selectedMode === 3) {
+        variantOptions.push({ value: 'match-flag', label: 'Match the flag' });
+      }
       row.appendChild(this.makeSelect('Style', variantOptions, this.selectedVariant,
-        (v) => { this.selectedVariant = v as QuizVariant; },
-        VARIANT_DESCRIPTIONS[this.selectedVariant]
+        (v) => { this.selectedVariant = v as QuizVariant; this.renderOptions(); }
       ));
     } else {
       // Time limit (for click & type / free type)

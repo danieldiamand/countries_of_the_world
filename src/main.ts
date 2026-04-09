@@ -40,6 +40,7 @@ class App {
   private showStartScreen(): void {
     this.cleanupGame();
     this.worldMap.resetStates();
+    this.worldMap.setActiveCountryIds(null);
     this.worldMap.resetZoom();
 
     this.startScreen = new StartScreen(this.app, (config) => {
@@ -104,6 +105,7 @@ class App {
       onEnd: () => this.handleEnd(),
       onChoice: (index) => this.handleChoice(index),
       onRevealNearMiss: () => this.handleRevealNearMiss(),
+      onZoom: (factor) => this.worldMap.zoomBy(factor),
     });
 
     this.gameHUD.setModeLabel(adapter.modeName);
@@ -113,7 +115,10 @@ class App {
 
     this.engine.on('correct', (event) => {
       const country = event.country!;
-      this.worldMap.setCountryState(country.id, 'correct');
+      // Don't color countries on the map for Flag Quiz (shows answers)
+      if (config.mode !== 3) {
+        this.worldMap.setCountryState(country.id, 'correct');
+      }
       this.gameHUD?.showCorrectToast(country);
       this.gameHUD?.clearInput();
       this.gameHUD?.updateScore(
@@ -203,6 +208,16 @@ class App {
     this.engine.start(config, adapter);
     this.gameHUD.updateScore(0, this.engine.totalCountries);
 
+    // Zoom to continent if specific one selected
+    if (config.continent !== 'World') {
+      this.worldMap.zoomToContinent(config.continent);
+      // Grey out non-active countries
+      const activeIds = new Set(this.engine.remainingCountries.map(c => c.id));
+      this.worldMap.setActiveCountryIds(activeIds);
+    } else {
+      this.worldMap.setActiveCountryIds(null);
+    }
+
     // Initial timer display
     if (config.timeLimit && !config.questionCount) {
       this.gameHUD.updateTimer(config.timeLimit * 60, true);
@@ -265,6 +280,9 @@ class App {
   private showResults(result: GameResult): void {
     this.gameHUD?.dispose();
     this.gameHUD = null;
+
+    // Clear grey-out
+    this.worldMap.setActiveCountryIds(null);
 
     // Color map: correct = green, missed = faded red
     result.guessedCountries.forEach((c) => {

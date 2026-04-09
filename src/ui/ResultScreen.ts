@@ -32,23 +32,46 @@ export class ResultScreen {
     const sec = result.timeTaken % 60;
     const timeStr = `${min}:${sec.toString().padStart(2, '0')}`;
 
+    // Build correct countries list
+    let correctHTML = '';
+    if (result.guessedCountries.length > 0) {
+      const items = result.guessedCountries
+        .slice(0, 50)
+        .map(
+          (c: Country) =>
+            `<div class="result-item correct-item">
+              <img src="/flags/${c.alpha2}.svg" alt="${c.name}">
+              <span>${c.name}</span>
+              <span class="result-capital">${c.capital}</span>
+            </div>`
+        )
+        .join('');
+
+      correctHTML = `
+        <div class="result-list correct-list">
+          <h3>Correct (${result.guessedCountries.length})</h3>
+          ${items}
+        </div>
+      `;
+    }
+
     let missedHTML = '';
     if (result.missedCountries.length > 0) {
       const items = result.missedCountries
-        .slice(0, 50) // limit display
+        .slice(0, 50)
         .map(
           (c: Country) =>
-            `<div class="missed-item">
+            `<div class="result-item missed-item">
               <img src="/flags/${c.alpha2}.svg" alt="${c.name}">
               <span>${c.name}</span>
-              <span style="color: var(--color-text-muted); margin-left: auto; font-size: 0.8rem;">${c.capital}</span>
+              <span class="result-capital">${c.capital}</span>
             </div>`
         )
         .join('');
 
       missedHTML = `
-        <div class="missed-list">
-          <h3>Missed Countries (${result.missedCountries.length})</h3>
+        <div class="result-list missed-list">
+          <h3>Missed (${result.missedCountries.length})</h3>
           ${items}
         </div>
       `;
@@ -79,6 +102,7 @@ export class ResultScreen {
           </div>
         </div>
 
+        ${correctHTML}
         ${missedHTML}
 
         <div class="results-actions">

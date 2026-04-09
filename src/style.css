@@ -347,9 +347,16 @@ html, body {
   align-items: center;
   padding: 0 16px 16px;
   gap: 10px;
+  pointer-events: none;
+  background: linear-gradient(to top, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.6) 60%, transparent 100%);
+  padding-top: 24px;
 }
 
-/* Prompt Area */
+.hud-bottom > * {
+  pointer-events: auto;
+}
+
+/* Prompt Area — click-through so map clicks work */
 .prompt-area {
   display: flex;
   align-items: center;
@@ -357,6 +364,7 @@ html, body {
   gap: 16px;
   min-height: 100px;
   padding: 12px 0;
+  pointer-events: none;
 }
 
 .prompt-flag {
@@ -390,8 +398,28 @@ html, body {
   max-width: 520px;
 }
 
-.guess-input {
+.input-wrapper {
   flex: 1;
+  position: relative;
+}
+
+.hint-overlay {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1rem;
+  font-weight: 400;
+  font-family: var(--font-sans);
+  color: var(--color-hinted);
+  pointer-events: none;
+  white-space: pre;
+  z-index: 2;
+  line-height: 1;
+}
+
+.guess-input {
+  width: 100%;
   padding: 12px 16px;
   font-size: 1rem;
   font-weight: 400;
@@ -404,6 +432,7 @@ html, body {
   outline: none;
   transition: border-color var(--transition-fast), background var(--transition-fast);
   box-shadow: var(--shadow-sm);
+  position: relative;
 }
 
 .guess-input:focus {
@@ -419,11 +448,10 @@ html, body {
   background: var(--color-hinted-light);
 }
 
+/* Hinted input: text invisible, overlay renders colored text */
 .guess-input.hinted {
-  border-color: var(--color-hinted);
-  color: var(--color-hinted);
-  font-weight: 500;
-  letter-spacing: 0.06em;
+  color: transparent;
+  caret-color: var(--color-text);
 }
 
 @keyframes shake {
@@ -434,14 +462,14 @@ html, body {
   80% { transform: translateX(4px); }
 }
 
-/* Hint + Skip buttons — minimal text style */
+/* Hint + Skip buttons */
 .hint-btn, .skip-btn {
   padding: 8px 14px;
   font-size: 0.78rem;
   font-weight: 500;
   font-family: var(--font-sans);
   color: var(--color-text-muted);
-  background: transparent;
+  background: var(--color-surface);
   border: 1.5px solid var(--color-card-border);
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -453,30 +481,35 @@ html, body {
 .hint-btn {
   color: var(--color-hinted);
   border-color: var(--color-hinted);
+  background: var(--color-hinted-light);
 }
 
 .hint-btn:hover {
-  background: var(--color-hinted-light);
-  color: var(--color-hinted);
+  background: var(--color-hinted);
+  color: white;
 }
 
 .skip-btn:hover {
-  background: var(--color-surface);
+  background: var(--color-surface-pressed);
   color: var(--color-text);
 }
 
 /* Multiple Choice */
 .choices-row {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
   justify-content: center;
-  max-width: 600px;
+  max-width: 700px;
+  width: 100%;
 }
 
 .choice-btn {
-  padding: 10px 22px;
-  font-size: 0.9rem;
+  flex: 1;
+  min-width: 180px;
+  max-width: 220px;
+  padding: 14px 22px;
+  font-size: 0.92rem;
   font-weight: 500;
   color: var(--color-text);
   background: rgba(255, 255, 255, 0.95);
@@ -486,11 +519,17 @@ html, body {
   cursor: pointer;
   transition: all var(--transition-fast);
   box-shadow: var(--shadow-sm);
+  text-align: center;
 }
 
-.choice-btn:hover {
+.choice-btn:hover:not(.disabled) {
   border-color: var(--color-selected);
   background: var(--color-selected-light);
+}
+
+.choice-btn.disabled {
+  cursor: default;
+  opacity: 0.8;
 }
 
 .choice-btn.correct {
@@ -505,8 +544,8 @@ html, body {
 
 /* Reverse variant: flag choices */
 .flag-choice {
-  width: 100px;
-  height: 75px;
+  width: 120px;
+  height: 90px;
   object-fit: contain;
   border-radius: var(--radius-sm);
   border: 2px solid var(--color-card-border);
@@ -641,6 +680,7 @@ html, body {
   margin-top: 20px;
   max-height: 200px;
   overflow-y: auto;
+  padding-right: 8px;
 }
 
 .missed-list h3 {
@@ -737,6 +777,93 @@ html, body {
   font-weight: 500;
   text-decoration: underline;
   pointer-events: auto;
+}
+
+/* ── Zoom Controls ────────────────────────────────────── */
+.zoom-controls {
+  position: absolute;
+  bottom: 80px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 25;
+  pointer-events: auto;
+}
+
+.zoom-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  font-weight: 500;
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  border: 1.5px solid var(--color-card-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-sm);
+  padding: 0;
+  line-height: 1;
+}
+
+.zoom-btn:hover {
+  background: var(--color-surface-pressed);
+  box-shadow: var(--shadow-md);
+}
+
+/* ── Result Lists ─────────────────────────────────────── */
+.result-list {
+  margin-top: 16px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.result-list h3 {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+  position: sticky;
+  top: 0;
+  background: var(--color-card);
+  padding: 4px 0;
+}
+
+.result-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-card-border);
+  font-size: 0.85rem;
+  color: var(--color-text);
+}
+
+.result-item img {
+  width: 26px;
+  height: 20px;
+  object-fit: contain;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.result-capital {
+  color: var(--color-text-muted);
+  margin-left: auto;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+  padding-right: 4px;
+}
+
+.correct-list h3 {
+  color: var(--color-correct);
 }
 
 /* ── Responsive ───────────────────────────────────────── */

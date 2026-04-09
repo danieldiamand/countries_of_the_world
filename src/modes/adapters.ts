@@ -7,7 +7,7 @@ export class ClickAndTypeMode implements ModeAdapter {
   readonly modeName = 'Click & Type';
 
   getPrompt(country: Country): PromptData {
-    return { type: 'click', country, text: 'Name this country' };
+    return { type: 'click', country, text: 'Name this country or select another' };
   }
 
   getAnswer(country: Country): string[] {

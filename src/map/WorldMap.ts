@@ -47,6 +47,9 @@ export class WorldMap {
   // Cached centroids in projected [x, y] coords
   private centroids: Map<string, [number, number]> = new Map();
 
+  // Active country IDs (for greying out non-active countries)
+  private activeCountryIds: Set<string> | null = null;
+
   constructor(container: HTMLElement) {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'world-map-canvas';
@@ -163,6 +166,9 @@ export class WorldMap {
       '250': [2.5, 46.5],   // France → metropolitan France, not French Guiana
       '840': [-98, 39],     // USA → contiguous US, not pulled by Alaska/Hawaii
       '528': [5.5, 52.3],   // Netherlands → European Netherlands
+      '643': [40, 56],      // Russia → Moscow area, not middle of Siberia
+      '124': [-96, 56],     // Canada → southern populated area
+      '156': [104, 35],     // China → central China
     };
 
     for (const feature of this.features) {
@@ -281,12 +287,10 @@ export class WorldMap {
     const cx = storedCentroid ? storedCentroid[0] : (bx0 + bx1) / 2;
     const cy = storedCentroid ? storedCentroid[1] : (by0 + by1) / 2;
 
-    // Use centroid-based virtual bounds for countries with overseas territories
-    // (so we don't zoom out to show French Guiana when targeting France)
-    const OVERSEAS_IDS = new Set(['250', '840', '528']);
+    // Use centroid-based virtual bounds for countries with large overseas territories
+    const LARGE_IDS = new Set(['250', '840', '528', '643', '124', '156']);
     let dx: number, dy: number;
-    if (OVERSEAS_IDS.has(countryId)) {
-      // Use a modest virtual size around the centroid
+    if (LARGE_IDS.has(countryId)) {
       dx = this.width * 0.15;
       dy = this.height * 0.15;
     } else {
@@ -297,37 +301,22 @@ export class WorldMap {
     // Where is the country centroid in *screen* coordinates right now?
     const [screenX, screenY] = this.currentTransform.apply([cx, cy]);
 
-    // Dead zone: inner 60% of the viewport
-    const marginX = this.width * 0.2;
-    const marginY = this.height * 0.2;
+    // Dead zone: inner 40% of the viewport (smaller = more willing to pan)
+    const marginX = this.width * 0.3;
+    const marginY = this.height * 0.3;
     const inDeadZone =
       screenX > marginX &&
       screenX < this.width - marginX &&
       screenY > marginY &&
       screenY < this.height - marginY;
 
-    // Check screen-space size of the country
-    const [screenX0, screenY0] = this.currentTransform.apply([bx0, by0]);
-    const [screenX1, screenY1] = this.currentTransform.apply([bx1, by1]);
-    const screenDx = Math.abs(screenX1 - screenX0);
-    const screenDy = Math.abs(screenY1 - screenY0);
-    const reasonableSize =
-      screenDx > 15 && screenDy > 10 &&
-      screenDx < this.width * 0.8 && screenDy < this.height * 0.8;
-
-    // If already visible and in dead zone, don't pan
-    if (inDeadZone && reasonableSize) {
+    // If centroid is in the dead zone, skip pan entirely
+    if (inDeadZone) {
       return;
     }
 
-    // Calculate a gentle zoom level — cap at 4x, at least 1.2
-    const scale = Math.min(
-      4,
-      Math.max(1.2, 0.5 / Math.max(dx / this.width, dy / this.height))
-    );
-
-    // Don't zoom IN past the current zoom level (avoid jarring zoom-in when only pan needed)
-    const targetScale = Math.max(scale, this.currentTransform.k);
+    // PAN ONLY — keep current zoom level, just center on the country
+    const targetScale = this.currentTransform.k;
 
     const transform = d3.zoomIdentity
       .translate(this.width / 2, this.height / 2)
@@ -347,6 +336,53 @@ export class WorldMap {
       .transition()
       .duration(duration)
       .call(this.zoom.transform as any, d3.zoomIdentity);
+  }
+
+  /**
+   * Zoom to a specific continent region.
+   */
+  zoomToContinent(continent: string): void {
+    const CONTINENT_BOUNDS: Record<string, { center: [number, number]; scale: number }> = {
+      'Africa': { center: [20, 0], scale: 2.2 },
+      'Asia': { center: [90, 30], scale: 2 },
+      'Europe': { center: [15, 52], scale: 3.5 },
+      'North America': { center: [-95, 40], scale: 2.2 },
+      'South America': { center: [-60, -15], scale: 2.2 },
+      'Oceania': { center: [140, -25], scale: 2.5 },
+    };
+    const region = CONTINENT_BOUNDS[continent];
+    if (!region) return;
+    const projected = this.projection(region.center);
+    if (!projected) return;
+    d3.select(this.canvas).interrupt();
+    const transform = d3.zoomIdentity
+      .translate(this.width / 2, this.height / 2)
+      .scale(region.scale)
+      .translate(-projected[0], -projected[1]);
+    d3.select(this.canvas)
+      .transition()
+      .duration(600)
+      .ease(d3.easeCubicInOut)
+      .call(this.zoom.transform as any, transform);
+  }
+
+  /**
+   * Grey out countries not in the given set. Pass null to clear.
+   */
+  setActiveCountryIds(ids: Set<string> | null): void {
+    this.activeCountryIds = ids;
+    this.render();
+  }
+
+  /**
+   * Set zoom level programmatically (for +/- buttons).
+   */
+  zoomBy(factor: number): void {
+    d3.select(this.canvas).interrupt();
+    d3.select(this.canvas)
+      .transition()
+      .duration(200)
+      .call(this.zoom.scaleBy as any, factor);
   }
 
   render(): void {
@@ -370,7 +406,11 @@ export class WorldMap {
       ctx.beginPath();
       pathGen(feature as any);
 
-      if (state === 'correct') ctx.fillStyle = MAP_COLORS.correct;
+      const isGreyedOut = this.activeCountryIds !== null && id !== '' && !this.activeCountryIds.has(id);
+
+      if (isGreyedOut) {
+        ctx.fillStyle = '#F0EDE9';
+      } else if (state === 'correct') ctx.fillStyle = MAP_COLORS.correct;
       else if (state === 'hinted') ctx.fillStyle = MAP_COLORS.hinted;
       else if (state === 'selected') ctx.fillStyle = MAP_COLORS.selected;
       else if (state === 'highlighted') ctx.fillStyle = MAP_COLORS.highlighted;

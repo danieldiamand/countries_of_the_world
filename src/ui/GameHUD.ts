@@ -9,6 +9,7 @@ export class GameHUD {
   private nearMissBar: HTMLElement;
   private inputRow: HTMLElement;
   private input: HTMLInputElement;
+  private hintOverlay: HTMLElement;
   private choicesRow: HTMLElement;
   private toastContainer: HTMLElement;
   private scoreEl: HTMLElement;
@@ -21,6 +22,7 @@ export class GameHUD {
   private onEnd: () => void;
   private onChoice: (index: number) => void;
   private onRevealNearMiss: (() => void) | null = null;
+  private onZoom: ((factor: number) => void) | null = null;
 
   private config: GameConfig;
 
@@ -37,6 +39,7 @@ export class GameHUD {
       onEnd: () => void;
       onChoice: (index: number) => void;
       onRevealNearMiss?: () => void;
+      onZoom?: (factor: number) => void;
     }
   ) {
     this.config = config;
@@ -46,6 +49,7 @@ export class GameHUD {
     this.onEnd = callbacks.onEnd;
     this.onChoice = callbacks.onChoice;
     this.onRevealNearMiss = callbacks.onRevealNearMiss || null;
+    this.onZoom = callbacks.onZoom || null;
 
     this.container = document.createElement('div');
     this.container.className = 'game-hud';
@@ -109,6 +113,15 @@ export class GameHUD {
     this.inputRow.className = 'input-row';
     this.bottomBar.appendChild(this.inputRow);
 
+    // Input wrapper (for hint overlay)
+    const inputWrapper = document.createElement('div');
+    inputWrapper.className = 'input-wrapper';
+    this.inputRow.appendChild(inputWrapper);
+
+    this.hintOverlay = document.createElement('span');
+    this.hintOverlay.className = 'hint-overlay';
+    inputWrapper.appendChild(this.hintOverlay);
+
     this.input = document.createElement('input');
     this.input.type = 'text';
     this.input.className = 'guess-input';
@@ -116,7 +129,7 @@ export class GameHUD {
     this.input.autocomplete = 'off';
     this.input.autocapitalize = 'off';
     this.input.spellcheck = false;
-    this.inputRow.appendChild(this.input);
+    inputWrapper.appendChild(this.input);
 
     // Hint button
     const hintBtn = document.createElement('button');
@@ -143,6 +156,25 @@ export class GameHUD {
       });
       this.inputRow.appendChild(skipBtn);
     }
+
+    // Zoom controls (bottom-right)
+    const zoomControls = document.createElement('div');
+    zoomControls.className = 'zoom-controls';
+    this.container.appendChild(zoomControls);
+
+    const zoomIn = document.createElement('button');
+    zoomIn.className = 'zoom-btn';
+    zoomIn.textContent = '+';
+    zoomIn.title = 'Zoom in';
+    zoomIn.addEventListener('click', (e) => { e.preventDefault(); this.onZoom?.(1.5); });
+    zoomControls.appendChild(zoomIn);
+
+    const zoomOut = document.createElement('button');
+    zoomOut.className = 'zoom-btn';
+    zoomOut.textContent = '\u2212';
+    zoomOut.title = 'Zoom out';
+    zoomOut.addEventListener('click', (e) => { e.preventDefault(); this.onZoom?.(1 / 1.5); });
+    zoomControls.appendChild(zoomOut);
 
     // Input events
     this.input.addEventListener('keydown', (e) => {
@@ -175,6 +207,7 @@ export class GameHUD {
         this.input.value = this.hintPrefix;
         this.input.setSelectionRange(this.hintPrefix.length, this.hintPrefix.length);
       }
+      this.updateHintOverlay();
     });
 
     // Keep input focused
@@ -189,7 +222,7 @@ export class GameHUD {
 
   private getPlaceholder(): string {
     switch (this.config.mode) {
-      case 1: return 'Click a country, then type its name...';
+      case 1: return 'Name this country or select another...';
       case 2: return 'Type any country name...';
       case 3: return 'Name this country...';
       case 5: return 'Type the capital city...';
@@ -287,9 +320,12 @@ export class GameHUD {
    */
   showHint(hintText: string): void {
     this.hintPrefix = hintText;
-    this.input.value = hintText;
+    const currentVal = this.input.value;
+    const userText = currentVal.length > this.hintPrefix.length ? currentVal.slice(this.hintPrefix.length) : '';
+    this.input.value = hintText + userText;
     this.input.classList.add('hinted');
-    this.input.setSelectionRange(hintText.length, hintText.length);
+    this.updateHintOverlay();
+    this.input.setSelectionRange(this.input.value.length, this.input.value.length);
   }
 
   /**
@@ -300,11 +336,13 @@ export class GameHUD {
       this.hintPrefix = hintText;
       this.input.value = hintText;
       this.input.classList.add('hinted');
+      this.updateHintOverlay();
       this.input.setSelectionRange(hintText.length, hintText.length);
     } else {
       this.hintPrefix = '';
       this.input.value = '';
       this.input.classList.remove('hinted');
+      this.hintOverlay.innerHTML = '';
       this.input.placeholder = this.getPlaceholder();
     }
   }
@@ -347,8 +385,26 @@ export class GameHUD {
     this.hintPrefix = '';
     this.input.value = '';
     this.input.classList.remove('near-miss', 'hinted');
+    this.hintOverlay.textContent = '';
     this.nearMissBar.classList.remove('visible');
     requestAnimationFrame(() => this.input.focus());
+  }
+
+  private updateHintOverlay(): void {
+    if (!this.hintPrefix) {
+      this.hintOverlay.innerHTML = '';
+      return;
+    }
+    const userText = this.input.value.slice(this.hintPrefix.length);
+    this.hintOverlay.innerHTML = '';
+    const orangeSpan = document.createElement('span');
+    orangeSpan.style.color = 'var(--color-hinted)';
+    orangeSpan.textContent = this.hintPrefix;
+    this.hintOverlay.appendChild(orangeSpan);
+    const blackSpan = document.createElement('span');
+    blackSpan.style.color = 'var(--color-text)';
+    blackSpan.textContent = userText;
+    this.hintOverlay.appendChild(blackSpan);
   }
 
   showCorrectToast(country: Country): void {
@@ -365,6 +421,8 @@ export class GameHUD {
   showChoiceResult(correctIndex: number, chosenIndex: number): void {
     const buttons = this.choicesRow.querySelectorAll('.choice-btn, .flag-choice');
     buttons.forEach((btn, idx) => {
+      (btn as HTMLButtonElement).disabled = true;
+      btn.classList.add('disabled');
       if (idx === correctIndex) btn.classList.add('correct');
       else if (idx === chosenIndex) btn.classList.add('wrong');
     });

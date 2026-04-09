@@ -111,7 +111,10 @@ export class GameEngine {
     }
 
     this.emit({ type: 'start' });
-    this.emitNext();
+    // Mode 1: start with no country selected (user clicks first)
+    if (config.mode !== 1) {
+      this.emitNext();
+    }
   }
 
   get isRunning(): boolean {
@@ -272,11 +275,24 @@ export class GameEngine {
     this.nearMissCountry = null;
 
     const current = this.pool[this.currentIndex];
-    if (current && !this.guessed.has(current.id)) {
-      this.pool.splice(this.currentIndex, 1);
-      this.pool.push(current);
+
+    // Use geographic advance logic (same as after correct answer)
+    // to pick the next country instead of just moving to pool end
+    if (this.config.mode === 1 && current) {
+      const nearest = this.findNearestGeographic(current);
+      if (nearest) {
+        const idx = this.pool.indexOf(nearest);
+        if (idx >= 0) this.currentIndex = idx;
+      } else {
+        this.findNextUnguessed();
+      }
     } else {
-      this.currentIndex++;
+      if (current && !this.guessed.has(current.id)) {
+        this.pool.splice(this.currentIndex, 1);
+        this.pool.push(current);
+      } else {
+        this.currentIndex++;
+      }
     }
 
     this.emit({ type: 'skip' });
@@ -371,15 +387,15 @@ export class GameEngine {
       return sameContinent.length > 0 ? sameContinent[0] : remaining[0];
     }
 
-    // Score each remaining country: prefer same continent, closest distance
+    // Score each remaining country: strongly prefer same continent, closest distance
     const scored = remaining.map((c) => {
       const centroid = this.centroids.get(c.id);
       if (!centroid) return { country: c, score: Infinity };
       const dx = centroid[0] - lastCentroid[0];
       const dy = centroid[1] - lastCentroid[1];
       let dist = Math.sqrt(dx * dx + dy * dy);
-      // Penalize cross-continent jumps
-      if (c.continent !== lastCorrect.continent) dist += 5000;
+      // Strongly penalize cross-continent jumps so we finish a continent first
+      if (c.continent !== lastCorrect.continent) dist += 50000;
       return { country: c, score: dist };
     });
 
