@@ -315,7 +315,7 @@ export class GameHUD {
     if (prompt.type === 'flag' && prompt.country) {
       const img = document.createElement('img');
       img.className = 'prompt-flag';
-      img.src = `/flags/${prompt.country.alpha2}.svg`;
+      img.src = `${import.meta.env.BASE_URL}flags/${prompt.country.alpha2}.svg`;
       img.alt = 'Flag';
       this.promptArea.appendChild(img);
     }
@@ -361,7 +361,7 @@ export class GameHUD {
         prompt.choiceItems.forEach((country, idx) => {
           const img = document.createElement('img');
           img.className = 'flag-choice';
-          img.src = `/flags/${country.alpha2}.svg`;
+          img.src = `${import.meta.env.BASE_URL}flags/${country.alpha2}.svg`;
           img.alt = 'Flag option';
           img.addEventListener('click', () => this.onChoice(idx));
           this.choicesRow.appendChild(img);
@@ -475,7 +475,7 @@ export class GameHUD {
     const toast = document.createElement('div');
     toast.className = 'toast correct';
     toast.innerHTML = `
-      <img class="toast-flag" src="/flags/${country.alpha2}.svg" alt="${country.name}">
+      <img class="toast-flag" src="${import.meta.env.BASE_URL}flags/${country.alpha2}.svg" alt="${country.name}">
       <span class="toast-name">${country.name}</span>
     `;
     this.toastContainer.appendChild(toast);

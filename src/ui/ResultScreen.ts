@@ -40,7 +40,7 @@ export class ResultScreen {
         .map(
           (c: Country) =>
             `<div class="result-item correct-item">
-              <img src="/flags/${c.alpha2}.svg" alt="${c.name}">
+              <img src="${import.meta.env.BASE_URL}flags/${c.alpha2}.svg" alt="${c.name}">
               <span>${c.name}</span>
               <span class="result-capital">${c.capital}</span>
             </div>`
@@ -62,7 +62,7 @@ export class ResultScreen {
         .map(
           (c: Country) =>
             `<div class="result-item missed-item">
-              <img src="/flags/${c.alpha2}.svg" alt="${c.name}">
+              <img src="${import.meta.env.BASE_URL}flags/${c.alpha2}.svg" alt="${c.name}">
               <span>${c.name}</span>
               <span class="result-capital">${c.capital}</span>
             </div>`

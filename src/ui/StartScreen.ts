@@ -276,7 +276,7 @@ export class StartScreen {
       row.appendChild(cb);
 
       const flag = document.createElement('img');
-      flag.src = `/flags/${t.alpha2}.svg`;
+      flag.src = `${import.meta.env.BASE_URL}flags/${t.alpha2}.svg`;
       flag.alt = t.name;
       flag.className = 'territory-flag';
       row.appendChild(flag);

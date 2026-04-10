@@ -489,7 +489,7 @@ class App {
     const pool = this.engine.remainingCountries;
     for (const country of pool) {
       const img = new Image();
-      img.src = `/flags/${country.alpha2}.svg`;
+      img.src = `${import.meta.env.BASE_URL}flags/${country.alpha2}.svg`;
     }
   }
 
@@ -499,7 +499,7 @@ class App {
   private preloadAllFlags(): void {
     for (const country of allCountries) {
       const img = new Image();
-      img.src = `/flags/${country.alpha2}.svg`;
+      img.src = `${import.meta.env.BASE_URL}flags/${country.alpha2}.svg`;
     }
   }
 }

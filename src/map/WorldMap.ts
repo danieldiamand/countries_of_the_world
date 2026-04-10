@@ -274,7 +274,7 @@ export class WorldMap {
   }
 
   async load(): Promise<void> {
-    const response = await fetch('/data/world-50m.json');
+    const response = await fetch(`${import.meta.env.BASE_URL}data/world-50m.json`);
     const topology = (await response.json()) as Topology;
 
     const countriesGeo = topojson.feature(
