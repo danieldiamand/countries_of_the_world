@@ -154,12 +154,14 @@ export class GameHUD {
     this.input.autocomplete = 'off';
     this.input.autocapitalize = 'off';
     this.input.spellcheck = false;
-    // Use 'search' inputmode for a compact keyboard without suggestions bar
+    // Use 'search' inputmode to minimize keyboard accessory bars on mobile
     this.input.inputMode = 'search';
+    this.input.name = 'country-guess'; // explicit name prevents password manager detection
     // Prevent mobile keyboard suggestions/autocorrect
     this.input.setAttribute('autocorrect', 'off');
     this.input.setAttribute('data-form-type', 'other');
     this.input.setAttribute('data-lpignore', 'true');
+    this.input.setAttribute('data-1p-ignore', 'true'); // 1Password
     this.input.setAttribute('enterkeyhint', 'go');
     inputWrapper.appendChild(this.input);
 
@@ -498,13 +500,11 @@ export class GameHUD {
     });
   }
 
-  focusInput(): void {
-    this.input.focus();
-  }
-
   /**
    * On mobile, prevent the keyboard from closing when the user taps the map canvas.
-   * We listen for touchend on the canvas and immediately re-focus the input.
+   * We call preventDefault() on mousedown/touchstart on the canvas to stop the
+   * browser from stealing focus from the input (which would dismiss the keyboard).
+   * D3 zoom still works because it listens for the events regardless of default.
    */
   private setupMobileKeyboardPersistence(): void {
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
@@ -515,13 +515,23 @@ export class GameHUD {
     const canvas = document.querySelector('.world-map-canvas') as HTMLCanvasElement | null;
     if (!canvas) return;
 
-    // After a touch on the canvas, re-focus the input to keep the keyboard open.
-    // Use a short delay to let the map click handler fire first.
-    canvas.addEventListener('touchend', () => {
-      if (this.input && !this.input.disabled && this.inputRow.style.display !== 'none') {
-        setTimeout(() => {
-          this.input.focus();
-        }, 50);
+    // Prevent canvas touches from stealing focus (and thus closing the keyboard).
+    // This is the standard technique: preventDefault on mousedown prevents the
+    // browser's default "focus the clicked element" behavior.
+    const preventBlur = (e: Event) => {
+      // Only prevent default if the input is currently active — otherwise
+      // allow normal focus behavior during start screen etc.
+      if (document.activeElement === this.input && !this.input.disabled) {
+        e.preventDefault();
+      }
+    };
+    canvas.addEventListener('mousedown', preventBlur);
+    canvas.addEventListener('touchstart', preventBlur);
+
+    // Also catch blur events and immediately refocus as a fallback
+    this.input.addEventListener('blur', () => {
+      if (!this.input.disabled && this.inputRow.style.display !== 'none') {
+        requestAnimationFrame(() => this.input.focus());
       }
     });
   }

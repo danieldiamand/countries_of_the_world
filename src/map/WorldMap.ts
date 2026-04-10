@@ -2,7 +2,7 @@ import * as d3 from 'd3';
 import * as topojson from 'topojson-client';
 import type { Topology, GeometryCollection } from 'topojson-specification';
 import type { FeatureCollection, Feature, Geometry } from 'geojson';
-import { countryById, type Country } from '../data/countries';
+
 
 export interface CountryFeature extends Feature<Geometry> {
   id?: string;
@@ -26,23 +26,28 @@ export const MAP_COLORS = {
   text: '#4A4340',
 };
 
+// Microstates too small to have visible polygons on a 50m resolution map.
+// We draw small dot markers at their centroids so they're findable.
+const MARKER_IDS = new Set([
+  '336',  // Vatican City (~0.44 km²)
+  '492',  // Monaco (~2 km²)
+  '674',  // San Marino (~61 km²)
+]);
+
 export class WorldMap {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private projection!: d3.GeoProjection;
   private path!: d3.GeoPath;
   private features: CountryFeature[] = [];
-  private landFeature: Feature<Geometry> | null = null;
   private countryStates: Map<string, CountryState> = new Map();
   private hoveredId: string | null = null;
   private zoom!: d3.ZoomBehavior<HTMLCanvasElement, unknown>;
   private currentTransform: d3.ZoomTransform = d3.zoomIdentity;
   private onCountryClick: ((countryId: string, rawId?: string, isOverseas?: boolean) => void) | null = null;
-  private onCountryHover: ((countryId: string | null) => void) | null = null;
   private loaded: boolean = false;
   private width: number = 0;
   private height: number = 0;
-  private activeTransition: d3.Transition<HTMLCanvasElement, unknown, null, undefined> | null = null;
 
   // Vertical offset ratio for fly-to centering (0 = center of viewport, negative = shift up)
   // Used on mobile to center countries in the visible top half when keyboard is open
@@ -59,10 +64,6 @@ export class WorldMap {
 
   // Gravity center: projected [x,y] that the view drifts towards at max zoom-out
   private gravityCenter: [number, number] | null = null;
-
-  // Fade-out entries: countryId → { start, duration } for smooth green→land fade
-  private fadeOutEntries: Map<string, { start: number; duration: number }> = new Map();
-  private fadeAnimFrame: number | null = null;
 
   constructor(container: HTMLElement) {
     this.canvas = document.createElement('canvas');
@@ -109,7 +110,7 @@ export class WorldMap {
 
     this.zoom = d3
       .zoom<HTMLCanvasElement, unknown>()
-      .scaleExtent([1, 25])
+      .scaleExtent([1, 12])
       .on('zoom', (event: d3.D3ZoomEvent<HTMLCanvasElement, unknown>) => {
         const t = event.transform;
         this.currentTransform = t;
@@ -119,11 +120,11 @@ export class WorldMap {
     // Intercept wheel events BEFORE d3's zoom handler (capture phase).
     // Below PAN_THRESHOLD, redirect zoom-out into smooth pan-to-center.
     this.canvas.addEventListener('wheel', (e) => {
-      e.preventDefault();
       const k = this.currentTransform.k;
 
       // Only intercept zoom-out when below threshold and gravity center is set
       if (e.deltaY > 0 && k <= PAN_THRESHOLD && this.gravityCenter) {
+        e.preventDefault();
         // Compute how far from centered we are
         const [gcx, gcy] = this.gravityCenter;
         const targetX = this.width / 2 - gcx;
@@ -161,7 +162,6 @@ export class WorldMap {
       if (newId !== this.hoveredId) {
         this.hoveredId = newId;
         this.canvas.style.cursor = newId ? 'pointer' : 'default';
-        this.onCountryHover?.(newId);
         this.render();
       }
     });
@@ -209,9 +209,37 @@ export class WorldMap {
     const [tx, ty] = this.currentTransform.invert([px, py]);
     const coords = this.projection.invert?.([tx, ty]);
     if (!coords) return null;
+
+    // Check marker countries FIRST (Vatican, Monaco, San Marino) — their dots
+    // sit on top of neighboring country polygons, so they must take priority.
+    const k = this.currentTransform.k;
+    if (k >= 5) {
+      const dotScreenRadius = 4 * (1 + Math.max(0, k - 5) * 0.08);
+      const hitRadiusPx = dotScreenRadius + 14;
+      let closest: CountryFeature | null = null;
+      let closestDist = Infinity;
+      for (const feature of this.features) {
+        const id = feature.id?.toString() || '';
+        if (!MARKER_IDS.has(id)) continue;
+        const centroid = this.centroids.get(id);
+        if (!centroid) continue;
+        const [sx, sy] = this.currentTransform.apply(centroid);
+        const dx = px - sx;
+        const dy = py - sy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < hitRadiusPx && dist < closestDist) {
+          closestDist = dist;
+          closest = feature;
+        }
+      }
+      if (closest) return closest;
+    }
+
+    // Standard polygon hit test
     for (const feature of this.features) {
       if (d3.geoContains(feature as any, coords)) return feature;
     }
+
     return null;
   }
 
@@ -300,11 +328,6 @@ export class WorldMap {
       }
     }
 
-    this.landFeature = topojson.merge(
-      topology,
-      (topology.objects.countries as any).geometries
-    ) as unknown as Feature<Geometry>;
-
     this.loaded = true;
     this.computeCentroids();
     this.render();
@@ -333,10 +356,6 @@ export class WorldMap {
     }
   }
 
-  setHoverHandler(handler: (countryId: string | null) => void): void {
-    this.onCountryHover = handler;
-  }
-
   /**
    * Set vertical offset for fly-to centering.
    * Negative values shift the center point upward (e.g. -0.25 = center in top half).
@@ -347,43 +366,8 @@ export class WorldMap {
   }
 
   setCountryState(countryId: string, state: CountryState): void {
-    // If setting to a concrete state, cancel any active fade for this country
-    this.fadeOutEntries.delete(countryId);
     this.countryStates.set(countryId, state);
     this.render();
-  }
-
-  /**
-   * Fade a country from its current color (typically 'correct') to 'default'
-   * over the given duration (ms). Starts a render loop for smooth animation.
-   */
-  fadeOutCountry(countryId: string, duration: number = 800): void {
-    this.fadeOutEntries.set(countryId, { start: performance.now(), duration });
-    this.startFadeLoop();
-  }
-
-  private startFadeLoop(): void {
-    if (this.fadeAnimFrame !== null) return; // already running
-    const tick = () => {
-      const now = performance.now();
-      let anyActive = false;
-      for (const [id, entry] of this.fadeOutEntries) {
-        const elapsed = now - entry.start;
-        if (elapsed >= entry.duration) {
-          this.fadeOutEntries.delete(id);
-          this.countryStates.set(id, 'default');
-        } else {
-          anyActive = true;
-        }
-      }
-      this.render();
-      if (anyActive) {
-        this.fadeAnimFrame = requestAnimationFrame(tick);
-      } else {
-        this.fadeAnimFrame = null;
-      }
-    };
-    this.fadeAnimFrame = requestAnimationFrame(tick);
   }
 
   batchSetCountryStates(states: Map<string, CountryState>): void {
@@ -402,18 +386,6 @@ export class WorldMap {
     return this.countryStates.get(countryId) || 'default';
   }
 
-  getCountryForFeature(feature: CountryFeature): Country | undefined {
-    if (!feature.id) return undefined;
-    return countryById.get(feature.id.toString());
-  }
-
-  /**
-   * Get projected centroid for a country (for geographic distance calculations).
-   */
-  getCentroid(countryId: string): [number, number] | null {
-    return this.centroids.get(countryId) || null;
-  }
-
   /**
    * Get all centroids map.
    */
@@ -425,21 +397,11 @@ export class WorldMap {
    * Smart fly-to: pans to center the country. Adjusts zoom automatically.
    * Options:
    *   forceCenter: always pan to center (no dead-zone skip)
-   *   maxScale: cap the zoom level (for gentler zoom in some modes)
-   *   viewportFraction: how much of the viewport the country should fill (default 0.4)
-   *   durationMultiplier: multiply duration for slower pans (default 1)
-   *   preferPanOnly: if true, prefer panning without zoom changes when country is visible
    */
   flyTo(
     countryId: string,
     duration: number = 750,
     forceCenter: boolean = false,
-    options?: {
-      maxScale?: number;
-      viewportFraction?: number;
-      durationMultiplier?: number;
-      preferPanOnly?: boolean;
-    }
   ): void {
     const feature = this.features.find((f) => f.id?.toString() === countryId);
     if (!feature || !this.path) return;
@@ -484,20 +446,18 @@ export class WorldMap {
     const MASSIVE_IDS = new Set(['643', '124']);            // Russia, Canada
     const BIG_IDS = new Set(['840', '156', '076', '036']); // USA, China, Brazil, Australia
     const VERY_BIG_IDS = new Set(['356', '032', '398', '010']); // India, Argentina, Kazakhstan, Antarctica
-    const SUPER_TINY_IDS = new Set([                        // Microstates & island specks — invisible even at tiny zoom
-      '336', '674', '492', '438',                           // Vatican, San Marino, Monaco, Liechtenstein
-      '020', '470', '048', '702',                           // Andorra, Malta, Bahrain, Singapore
-      '462',                                                // Maldives
-      '028', '052', '308', '659', '662', '670',             // Antigua, Barbados, Grenada, St Kitts, St Lucia, St Vincent
-      '520', '585', '798', '776',                           // Nauru, Palau, Tuvalu, Tonga
-      '174', '678', '690',                                  // Comoros, São Tomé, Seychelles
-    ]);
     const TINY_IDS = new Set([                              // Small countries — visible at high zoom
       '442', '132', '480', '270',                           // Luxembourg, Cabo Verde, Mauritius, Gambia
       '096', '626',                                         // Brunei, Timor-Leste
       '212', '780',                                         // Dominica, Trinidad
       '242', '296', '584', '583',                           // Fiji, Kiribati, Marshall Islands, Micronesia
       '882', '090', '548',                                  // Samoa, Solomon Islands, Vanuatu
+      '020', '470', '048', '702',                           // Andorra, Malta, Bahrain, Singapore
+      '462',                                                // Maldives
+      '028', '052', '308', '659', '662', '670',             // Antigua, Barbados, Grenada, St Kitts, St Lucia, St Vincent
+      '520', '585', '798', '776',                           // Nauru, Palau, Tuvalu, Tonga
+      '174', '678', '690',                                  // Comoros, São Tomé, Seychelles
+      '438',                                                // Liechtenstein
     ]);
 
     // Determine fixed target scale based on tier.
@@ -506,8 +466,7 @@ export class WorldMap {
     if (MASSIVE_IDS.has(countryId)) fixedScale = 2.2;
     else if (BIG_IDS.has(countryId)) fixedScale = 3.0;
     else if (VERY_BIG_IDS.has(countryId)) fixedScale = 3.8;
-    else if (SUPER_TINY_IDS.has(countryId)) fixedScale = 22;
-    else if (TINY_IDS.has(countryId)) fixedScale = 16;
+    else if (MARKER_IDS.has(countryId) || TINY_IDS.has(countryId)) fixedScale = 10;
     else fixedScale = 5.0; // STANDARD — the one zoom for nearly all countries
 
     // Where is the country centroid in *screen* coordinates right now?
@@ -522,42 +481,16 @@ export class WorldMap {
       screenY > marginY &&
       screenY < this.height - marginY;
 
-    const maxScale = options?.maxScale ?? 25;
-    const durationMult = options?.durationMultiplier ?? 1;
-    const preferPanOnly = options?.preferPanOnly ?? false;
+    let clampedIdeal = Math.max(1, Math.min(12, fixedScale));
 
-    // Use the explicit viewportFraction if provided (legacy callers),
-    // otherwise use the fixed scale tier.
-    let clampedIdeal: number;
-    if (options?.viewportFraction != null) {
-      const idealScale = Math.min(
-        (this.width * options.viewportFraction) / Math.max(dx, 1),
-        (this.height * options.viewportFraction) / Math.max(dy, 1)
-      );
-      clampedIdeal = Math.max(1, Math.min(maxScale, idealScale));
-    } else {
-      clampedIdeal = Math.max(1, Math.min(maxScale, fixedScale));
-    }
-
-    let targetScale: number;
-    if (preferPanOnly) {
-      // Only change zoom if the difference is large (> 2x)
-      const zoomRatio = clampedIdeal / this.currentTransform.k;
-      if (zoomRatio > 2 || zoomRatio < 0.5) {
-        targetScale = clampedIdeal;
-      } else {
-        targetScale = this.currentTransform.k;
-      }
-    } else {
-      targetScale = clampedIdeal;
-    }
+    const targetScale = clampedIdeal;
 
     // If centroid is already centered and zoom matches, skip (unless forceCenter)
     if (!forceCenter && inDeadZone && Math.abs(targetScale - this.currentTransform.k) < 0.05) {
       return;
     }
 
-    const actualDuration = duration * durationMult;
+    const actualDuration = duration;
 
     const t0 = this.currentTransform;
     // Apply vertical offset for mobile keyboard centering
@@ -624,7 +557,7 @@ export class WorldMap {
     const cy = (minY + maxY) / 2;
 
     // Scale to fit both features with breathing room (0.85 factor)
-    const targetScale = Math.max(1, Math.min(25,
+    const targetScale = Math.max(1, Math.min(12,
       0.85 * Math.min(this.width / Math.max(dx, 1), this.height / Math.max(dy, 1))
     ));
 
@@ -663,16 +596,18 @@ export class WorldMap {
 
   /**
    * Set a comfortable initial zoom for mobile (World mode).
-   * Zooms in ~1.8x centered slightly above middle to fill the small screen.
+   * Zooms in ~2.5x centered on Europe/Africa area to fill the small screen.
+   * Also shifts center upward to account for keyboard covering bottom half.
    */
   setInitialMobileZoom(): void {
-    const center: [number, number] = [10, 20]; // roughly world center
+    const center: [number, number] = [15, 35]; // Europe/Mediterranean area — good density of countries
     const projected = this.projection(center);
     if (!projected) return;
     d3.select(this.canvas).interrupt();
-    const scale = 1.8;
+    const scale = 2.5;
+    const centerY = this.height / 2 + this.height * this.flyToCenterYRatio;
     const transform = d3.zoomIdentity
-      .translate(this.width / 2, this.height / 2)
+      .translate(this.width / 2, centerY)
       .scale(scale)
       .translate(-projected[0], -projected[1]);
     d3.select(this.canvas)
@@ -778,11 +713,11 @@ export class WorldMap {
   zoomBy(factor: number): void {
     d3.select(this.canvas).interrupt();
     const currentK = this.currentTransform.k;
-    const newK = Math.max(1, Math.min(25, currentK * factor));
+    const newK = Math.max(1, Math.min(12, currentK * factor));
 
     // When zooming out to near minimum, smoothly center the view
     if (factor < 1 && newK <= 1.18) {
-      // Animate to scale 1, centered on gravity center (or default center)
+      // Use d3's zoom.transform for smooth animated zoom-out to center
       let targetTransform: d3.ZoomTransform;
       if (this.gravityCenter) {
         const [gcx, gcy] = this.gravityCenter;
@@ -792,70 +727,21 @@ export class WorldMap {
         targetTransform = d3.zoomIdentity;
       }
 
-      // Use manual tween for smooth straight-line animation
-      const t0 = this.currentTransform;
-      const t1 = targetTransform;
-      const c0x = (this.width / 2 - t0.x) / t0.k;
-      const c0y = (this.height / 2 - t0.y) / t0.k;
-      const c1x = (this.width / 2 - t1.x) / Math.max(t1.k, 1);
-      const c1y = (this.height / 2 - t1.y) / Math.max(t1.k, 1);
-
       d3.select(this.canvas)
         .transition()
         .duration(400)
         .ease(d3.easeCubicOut)
-        .tween('zoom', () => {
-          const ik = d3.interpolateNumber(t0.k, 1);
-          const icx = d3.interpolateNumber(c0x, c1x);
-          const icy = d3.interpolateNumber(c0y, c1y);
-          return (t: number) => {
-            const k = ik(t);
-            const cx = icx(t);
-            const cy = icy(t);
-            const x = this.width / 2 - k * cx;
-            const y = this.height / 2 - k * cy;
-            this.currentTransform = d3.zoomIdentity.translate(x, y).scale(k);
-            (this.canvas as any).__zoom = this.currentTransform;
-            this.render();
-          };
-        });
+        .call(this.zoom.transform as any, targetTransform);
       return;
     }
 
-    // Normal zoom: use manual tween for consistent animation
-    const t0 = this.currentTransform;
-    const cx = (this.width / 2 - t0.x) / t0.k;
-    const cy = (this.height / 2 - t0.y) / t0.k;
-    const t1 = d3.zoomIdentity
-      .translate(this.width / 2, this.height / 2)
-      .scale(newK)
-      .translate(-cx, -cy);
-
+    // Use d3's zoom.scaleTo for proper scaleExtent enforcement
+    const center: [number, number] = [this.width / 2, this.height / 2];
     d3.select(this.canvas)
       .transition()
       .duration(200)
       .ease(d3.easeCubicOut)
-      .tween('zoom', () => {
-        const ik = d3.interpolateNumber(t0.k, newK);
-        const ic0x = d3.interpolateNumber(
-          (this.width / 2 - t0.x) / t0.k,
-          (this.width / 2 - t1.x) / t1.k
-        );
-        const ic0y = d3.interpolateNumber(
-          (this.height / 2 - t0.y) / t0.k,
-          (this.height / 2 - t1.y) / t1.k
-        );
-        return (t: number) => {
-          const k = ik(t);
-          const cxx = ic0x(t);
-          const cyy = ic0y(t);
-          const x = this.width / 2 - k * cxx;
-          const y = this.height / 2 - k * cyy;
-          this.currentTransform = d3.zoomIdentity.translate(x, y).scale(k);
-          (this.canvas as any).__zoom = this.currentTransform;
-          this.render();
-        };
-      });
+      .call(this.zoom.scaleTo as any, newK, center);
   }
 
   private lerpColor(a: string, b: string, t: number): string {
@@ -898,14 +784,7 @@ export class WorldMap {
 
       const isGreyedOut = this.activeCountryIds !== null && id !== '' && !this.activeCountryIds.has(id);
 
-      // Check if this country is fading out (green → land)
-      const fadeEntry = this.fadeOutEntries.get(id);
-      if (fadeEntry && !isGreyedOut) {
-        const elapsed = performance.now() - fadeEntry.start;
-        const t = Math.min(1, elapsed / fadeEntry.duration);
-        const eased = t < 1 ? t * t * (3 - 2 * t) : 1; // smoothstep
-        ctx.fillStyle = this.lerpColor(MAP_COLORS.correct, MAP_COLORS.land, eased);
-      } else if (isGreyedOut) {
+      if (isGreyedOut) {
         ctx.fillStyle = '#D4CDC5';
       } else if (state === 'correct') ctx.fillStyle = MAP_COLORS.correct;
       else if (state === 'hinted') ctx.fillStyle = MAP_COLORS.hinted;
@@ -919,6 +798,45 @@ export class WorldMap {
       ctx.strokeStyle = MAP_COLORS.border;
       ctx.lineWidth = 0.5 / this.currentTransform.k;
       ctx.stroke();
+    }
+
+    // Draw dot markers for microstates (Vatican, Monaco, San Marino).
+    // Only show when zoomed in enough (k >= 5) so they don't clutter the zoomed-out view.
+    // Dots grow gently with zoom so they're easier to click at high zoom.
+    if (this.currentTransform.k >= 5) {
+      const baseRadius = 4;
+      const growthFactor = 1 + Math.max(0, this.currentTransform.k - 5) * 0.08;
+      const dotScreenRadius = baseRadius * growthFactor;
+      const dotRadius = dotScreenRadius / this.currentTransform.k;
+      for (const feature of this.features) {
+        const id = feature.id?.toString() || '';
+        if (!MARKER_IDS.has(id)) continue;
+        const centroid = this.centroids.get(id);
+        if (!centroid) continue;
+
+        const isGreyedOut = this.activeCountryIds !== null && id !== '' && !this.activeCountryIds.has(id);
+        if (isGreyedOut) continue;
+
+        const state = this.countryStates.get(id) || 'default';
+        const isHovered = this.hoveredId === id;
+
+        let fillColor: string;
+        if (state === 'correct') fillColor = MAP_COLORS.correct;
+        else if (state === 'hinted') fillColor = MAP_COLORS.hinted;
+        else if (state === 'selected') fillColor = MAP_COLORS.selected;
+        else if (state === 'highlighted') fillColor = MAP_COLORS.highlighted;
+        else if (state === 'missed') fillColor = MAP_COLORS.missed;
+        else if (isHovered) fillColor = MAP_COLORS.hover;
+        else fillColor = '#C8BFB4'; // border color — subtle default
+
+        ctx.beginPath();
+        ctx.arc(centroid[0], centroid[1], dotRadius, 0, Math.PI * 2);
+        ctx.fillStyle = fillColor;
+        ctx.fill();
+        ctx.strokeStyle = MAP_COLORS.border;
+        ctx.lineWidth = 0.5 / this.currentTransform.k;
+        ctx.stroke();
+      }
     }
 
     ctx.restore();

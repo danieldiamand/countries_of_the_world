@@ -101,9 +101,11 @@ class App {
 
     // Mobile: shift fly-to centering upward so countries appear in the visible
     // top half of the screen (bottom half is covered by the keyboard).
+    // The keyboard typically covers ~45% of the screen, so we shift by -0.25
+    // to center in the visible portion above the keyboard.
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
       (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
-    this.worldMap.setFlyToCenterYRatio(isMobile ? -0.2 : 0);
+    this.worldMap.setFlyToCenterYRatio(isMobile ? -0.25 : 0);
 
     // Create mode adapter
     const adapter = this.createAdapter(config);
@@ -149,9 +151,7 @@ class App {
               // Clicked overseas part of a multipolygon country (e.g. French Guiana)
               this.worldMap.flyToShowBoth(countryId, countryId, 600);
             } else {
-              this.worldMap.flyTo(countryId, 600, true, config.mode === 1 ? {
-                preferPanOnly: true,
-              } : undefined);
+              this.worldMap.flyTo(countryId, 600, true);
             }
           }
         }
@@ -295,9 +295,7 @@ class App {
           // Mode 1 (click & type): highlight auto-advanced country + fly to it
           if (config.mode === 1) {
             this.worldMap.setCountryState(country.id, 'highlighted');
-            this.worldMap.flyTo(country.id, 600, false, {
-              preferPanOnly: true,
-            });
+            this.worldMap.flyTo(country.id, 600, false);
             this.gameHUD?.setInputLocked(false);
             // Restore hint for this country if it had one
             const hint = this.engine.getHintForCountry(country.id);

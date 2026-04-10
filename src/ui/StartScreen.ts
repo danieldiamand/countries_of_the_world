@@ -62,9 +62,6 @@ export class StartScreen {
     return new Set(this.enabledTerritoryIds);
   }
 
-  show(): void { this.container.classList.remove('hidden'); }
-  hide(): void { this.container.classList.add('hidden'); }
-
   private render(): void {
     this.container.innerHTML = '';
 
@@ -211,8 +208,7 @@ export class StartScreen {
     label: string,
     options: { value: string; label: string }[],
     currentValue: string,
-    onChange: (value: string) => void,
-    description?: string
+    onChange: (value: string) => void
   ): HTMLElement {
     const group = document.createElement('div');
     group.className = 'config-group';
@@ -233,13 +229,6 @@ export class StartScreen {
     }
     select.addEventListener('change', () => onChange(select.value));
     group.appendChild(select);
-
-    if (description) {
-      const descEl = document.createElement('div');
-      descEl.className = 'mode-description';
-      descEl.textContent = description;
-      group.appendChild(descEl);
-    }
 
     return group;
   }

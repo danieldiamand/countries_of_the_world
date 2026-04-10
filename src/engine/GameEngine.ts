@@ -44,14 +44,6 @@ export class GameEngine {
     this.listeners.get(type)!.push(listener);
   }
 
-  off(type: GameEventType, listener: GameEventListener): void {
-    const list = this.listeners.get(type);
-    if (list) {
-      const idx = list.indexOf(listener);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
-
   removeAllListeners(): void {
     this.listeners.clear();
   }
