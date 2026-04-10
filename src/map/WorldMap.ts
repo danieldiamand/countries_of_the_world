@@ -473,6 +473,11 @@ export class WorldMap {
     const TINY_IDS = new Set([                              // Microstates & very small countries
       '336', '674', '492', '438',                           // Vatican, San Marino, Monaco, Liechtenstein
       '442', '470', '020', '048', '702',                    // Luxembourg, Malta, Andorra, Bahrain, Singapore
+      '174', '678', '690', '132', '480', '270',             // Comoros, São Tomé, Seychelles, Cabo Verde, Mauritius, Gambia
+      '462', '096', '626',                                  // Maldives, Brunei, Timor-Leste
+      '028', '052', '212', '308', '659', '662', '670', '780', // Antigua, Barbados, Dominica, Grenada, St Kitts, St Lucia, St Vincent, Trinidad
+      '242', '296', '584', '583', '520', '585',             // Fiji, Kiribati, Marshall Islands, Micronesia, Nauru, Palau
+      '882', '090', '776', '798', '548',                    // Samoa, Solomon Islands, Tonga, Tuvalu, Vanuatu
     ]);
 
     // Determine fixed target scale based on tier.
