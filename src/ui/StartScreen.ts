@@ -87,12 +87,12 @@ export class StartScreen {
     this.container.appendChild(inner);
 
     const h1 = document.createElement('h1');
-    h1.textContent = 'Countries of the World';
+    h1.textContent = "Diamand's Countries of the World";
     inner.appendChild(h1);
 
     const sub = document.createElement('p');
     sub.className = 'subtitle';
-    sub.textContent = 'Test your geography knowledge';
+    sub.textContent = 'Start learning!';
     inner.appendChild(sub);
 
     // Mode cards grid

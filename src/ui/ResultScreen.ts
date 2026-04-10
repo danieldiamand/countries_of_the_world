@@ -112,7 +112,7 @@ export class ResultScreen {
 
         <div class="results-actions">
           <button class="btn-primary" id="play-again">Play again</button>
-          <button class="btn-secondary" id="change-mode">Change game</button>
+          <button class="btn-secondary" id="change-mode">Home Page</button>
         </div>
       </div>
     `;

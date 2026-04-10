@@ -250,6 +250,7 @@ export class WorldMap {
       '643': [90, 62],      // Russia → geographic center of landmass
       '554': [174, -41],    // New Zealand → North/South Island center
       '242': [178, -18],    // Fiji → main islands
+      '036': [134, -27],    // Australia → visual center of mainland
     };
 
     for (const feature of this.features) {
