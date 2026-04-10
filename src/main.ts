@@ -121,19 +121,11 @@ class App {
         if (this.engine.isRunning) {
           const selected = this.engine.selectCountry(countryId);
           if (selected) {
-            this.worldMap.setCountryState(countryId, 'highlighted');
+            this.worldMap.setCountryState(countryId, 'selected');
             // Also highlight the territory feature if clicked on one
             if (territoryRawId) {
-              this.worldMap.setCountryState(territoryRawId, 'highlighted');
+              this.worldMap.setCountryState(territoryRawId, 'selected');
               this.highlightedTerritoryRawIds.add(territoryRawId);
-            }
-            // Highlight disabled child territories (e.g. Greenland for Denmark)
-            const childTerritories = this.parentToTerritoryMap.get(countryId);
-            if (childTerritories) {
-              for (const tid of childTerritories) {
-                this.worldMap.setCountryState(tid, 'highlighted');
-                this.highlightedTerritoryRawIds.add(tid);
-              }
             }
             // Unlock input now that a country is selected (mode 1)
             if (config.mode === 1) {
@@ -207,15 +199,15 @@ class App {
             this.worldMap.setCountryState(tid, 'correct');
           }
         }
-        // Hold green for 1.5s, then fade out over 1s
+        // Flash: revert after a longer delay so user sees it
         setTimeout(() => {
-          this.worldMap.fadeOutCountry(country.id, 1000);
+          this.worldMap.setCountryState(country.id, 'default');
           if (childTerritories) {
             for (const tid of childTerritories) {
-              this.worldMap.fadeOutCountry(tid, 1000);
+              this.worldMap.setCountryState(tid, 'default');
             }
           }
-        }, 1500);
+        }, 2500);
       } else {
         this.worldMap.setCountryState(country.id, 'correct');
         const childTerritories = this.parentToTerritoryMap.get(country.id);
@@ -259,14 +251,7 @@ class App {
     });
 
     this.engine.on('skip', () => {
-      if (config.mode === 3 || config.mode === 5) {
-        questionIndex++;
-        this.gameHUD?.updateScoreDetailed(
-          this.engine.correctCount,
-          questionIndex - this.engine.correctCount,
-          this.engine.totalCountries - questionIndex
-        );
-      }
+      // Skip moves the question to the back of the queue — don't change score
     });
 
     this.engine.on('hint', (event) => {
@@ -303,14 +288,6 @@ class App {
           // Mode 1 (click & type): highlight auto-advanced country + fly to it
           if (config.mode === 1) {
             this.worldMap.setCountryState(country.id, 'highlighted');
-            // Also highlight disabled child territories (e.g. Greenland for Denmark)
-            const childTerritories = this.parentToTerritoryMap.get(country.id);
-            if (childTerritories) {
-              for (const tid of childTerritories) {
-                this.worldMap.setCountryState(tid, 'highlighted');
-                this.highlightedTerritoryRawIds.add(tid);
-              }
-            }
             this.worldMap.flyTo(country.id, 600, false, {
               preferPanOnly: true,
             });
@@ -321,7 +298,7 @@ class App {
             return;
           }
 
-          this.worldMap.setCountryState(country.id, 'highlighted');
+          this.worldMap.setCountryState(country.id, 'selected');
 
           // For capital quiz free mode, fly to the country
           if (config.mode === 5) {
