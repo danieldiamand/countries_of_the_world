@@ -576,7 +576,7 @@ html, body {
   border-color: var(--color-input-focus);
 }
 
-.guess-input.shake {
+.input-wrapper.shake {
   animation: shake 0.4s ease;
 }
 

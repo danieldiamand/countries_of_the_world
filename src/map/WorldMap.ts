@@ -49,10 +49,6 @@ export class WorldMap {
   private width: number = 0;
   private height: number = 0;
 
-  // Vertical offset ratio for fly-to centering (0 = center of viewport, negative = shift up)
-  // Used on mobile to center countries in the visible top half when keyboard is open
-  private flyToCenterYRatio: number = 0;
-
   // Cached centroids in projected [x, y] coords
   private centroids: Map<string, [number, number]> = new Map();
 
@@ -356,15 +352,6 @@ export class WorldMap {
     }
   }
 
-  /**
-   * Set vertical offset for fly-to centering.
-   * Negative values shift the center point upward (e.g. -0.25 = center in top half).
-   * Used on mobile to account for the keyboard covering the bottom half.
-   */
-  setFlyToCenterYRatio(ratio: number): void {
-    this.flyToCenterYRatio = ratio;
-  }
-
   setCountryState(countryId: string, state: CountryState): void {
     this.countryStates.set(countryId, state);
     this.render();
@@ -493,8 +480,13 @@ export class WorldMap {
     const actualDuration = duration;
 
     const t0 = this.currentTransform;
-    // Apply vertical offset for mobile keyboard centering
-    const centerY = this.height / 2 + this.height * this.flyToCenterYRatio;
+
+    // On mobile with keyboard open, visualViewport.height < window.innerHeight.
+    // Center the fly-to in the visible portion above the keyboard.
+    const vv = window.visualViewport;
+    const visibleHeight = vv ? vv.height : this.height;
+    const visibleOffsetTop = vv ? vv.offsetTop : 0;
+    const centerY = visibleOffsetTop + visibleHeight / 2;
 
     const t1 = d3.zoomIdentity
       .translate(this.width / 2, centerY)
@@ -605,9 +597,8 @@ export class WorldMap {
     if (!projected) return;
     d3.select(this.canvas).interrupt();
     const scale = 2.5;
-    const centerY = this.height / 2 + this.height * this.flyToCenterYRatio;
     const transform = d3.zoomIdentity
-      .translate(this.width / 2, centerY)
+      .translate(this.width / 2, this.height / 2)
       .scale(scale)
       .translate(-projected[0], -projected[1]);
     d3.select(this.canvas)

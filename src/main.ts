@@ -38,6 +38,7 @@ class App {
 
     this.worldMap = new WorldMap(this.mapContainer);
     this.worldMap.load().then(() => {
+      document.getElementById('loading')?.remove();
       this.showStartScreen();
     });
   }
@@ -47,7 +48,6 @@ class App {
     this.worldMap.resetStates();
     this.worldMap.setActiveCountryIds(null);
     this.worldMap.setGravityCenter(null);
-    this.worldMap.setFlyToCenterYRatio(0);
     this.worldMap.resetZoom();
 
     this.startScreen = new StartScreen(this.app, (config) => {
@@ -99,14 +99,6 @@ class App {
     this.worldMap.resetStates();
     this.worldMap.resetZoom(300);
 
-    // Mobile: shift fly-to centering upward so countries appear in the visible
-    // top half of the screen (bottom half is covered by the keyboard).
-    // The keyboard typically covers ~45% of the screen, so we shift by -0.25
-    // to center in the visible portion above the keyboard.
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-      (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
-    this.worldMap.setFlyToCenterYRatio(isMobile ? -0.25 : 0);
-
     // Create mode adapter
     const adapter = this.createAdapter(config);
 
@@ -131,6 +123,14 @@ class App {
           const selected = this.engine.selectCountry(countryId);
           if (selected) {
             this.worldMap.setCountryState(countryId, 'selected');
+            // Also highlight child territories (e.g. Western Sahara for Morocco)
+            const childTerritories = this.parentToTerritoryMap.get(countryId);
+            if (childTerritories) {
+              for (const tid of childTerritories) {
+                this.worldMap.setCountryState(tid, 'selected');
+                this.highlightedTerritoryRawIds.add(tid);
+              }
+            }
             // Also highlight the territory feature if clicked on one
             if (territoryRawId) {
               this.worldMap.setCountryState(territoryRawId, 'selected');
@@ -295,6 +295,14 @@ class App {
           // Mode 1 (click & type): highlight auto-advanced country + fly to it
           if (config.mode === 1) {
             this.worldMap.setCountryState(country.id, 'highlighted');
+            // Also highlight child territories (e.g. Western Sahara for Morocco)
+            const childTerritories = this.parentToTerritoryMap.get(country.id);
+            if (childTerritories) {
+              for (const tid of childTerritories) {
+                this.worldMap.setCountryState(tid, 'highlighted');
+                this.highlightedTerritoryRawIds.add(tid);
+              }
+            }
             this.worldMap.flyTo(country.id, 600, false);
             this.gameHUD?.setInputLocked(false);
             // Restore hint for this country if it had one
@@ -365,6 +373,8 @@ class App {
       this.worldMap.setActiveCountryIds(null);
       this.worldMap.setGravityCenter([10, 20]);
       // On mobile, start at a higher zoom so the map fills the small screen better
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+        (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
       if (isMobile) {
         this.worldMap.setInitialMobileZoom();
       }

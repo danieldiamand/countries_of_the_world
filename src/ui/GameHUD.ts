@@ -9,6 +9,7 @@ export class GameHUD {
   private nearMissBar: HTMLElement;
   private inputRow: HTMLElement;
   private input: HTMLInputElement;
+  private inputWrapper: HTMLElement;
   private hintOverlay: HTMLElement;
   private choicesRow: HTMLElement;
   private choiceSkipBtn: HTMLButtonElement;
@@ -142,6 +143,7 @@ export class GameHUD {
     const inputWrapper = document.createElement('div');
     inputWrapper.className = 'input-wrapper';
     this.inputRow.appendChild(inputWrapper);
+    this.inputWrapper = inputWrapper;
 
     this.hintOverlay = document.createElement('span');
     this.hintOverlay.className = 'hint-overlay';
@@ -152,16 +154,16 @@ export class GameHUD {
     this.input.className = 'guess-input';
     this.input.placeholder = this.getPlaceholder();
     this.input.autocomplete = 'off';
-    this.input.autocapitalize = 'off';
+    this.input.autocapitalize = 'none';
     this.input.spellcheck = false;
-    // Use 'search' inputmode to minimize keyboard accessory bars on mobile
-    this.input.inputMode = 'search';
-    this.input.name = 'country-guess'; // explicit name prevents password manager detection
-    // Prevent mobile keyboard suggestions/autocorrect
+    this.input.inputMode = 'text';
+    this.input.name = 'country-guess';
+    // Suppress mobile keyboard suggestions/autocorrect/password managers
     this.input.setAttribute('autocorrect', 'off');
+    this.input.setAttribute('autocomplete', 'off');
     this.input.setAttribute('data-form-type', 'other');
     this.input.setAttribute('data-lpignore', 'true');
-    this.input.setAttribute('data-1p-ignore', 'true'); // 1Password
+    this.input.setAttribute('data-1p-ignore', 'true');
     this.input.setAttribute('enterkeyhint', 'go');
     inputWrapper.appendChild(this.input);
 
@@ -448,9 +450,9 @@ export class GameHUD {
   }
 
   shakeInput(): void {
-    this.input.classList.remove('shake');
-    void this.input.offsetWidth;
-    this.input.classList.add('shake');
+    this.inputWrapper.classList.remove('shake');
+    void this.inputWrapper.offsetWidth;
+    this.inputWrapper.classList.add('shake');
   }
 
   clearInput(): void {
