@@ -79,8 +79,11 @@ export class ResultScreen {
 
     const heading = pct === 100 ? 'Perfect' : pct >= 80 ? 'Great job' : pct >= 50 ? 'Good effort' : 'Keep practicing';
 
+    const modeLabel = result.modeName ? `<span class="results-mode">${result.modeName}</span>` : '';
+
     this.container.innerHTML = `
       <div class="results-card">
+        ${modeLabel}
         <h2>${heading}</h2>
         
         <div class="stats-grid">
@@ -102,8 +105,10 @@ export class ResultScreen {
           </div>
         </div>
 
-        ${correctHTML}
-        ${missedHTML}
+        <div class="result-lists-wrapper">
+          ${correctHTML}
+          ${missedHTML}
+        </div>
 
         <div class="results-actions">
           <button class="btn-primary" id="play-again">Play again</button>

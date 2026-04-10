@@ -24,12 +24,20 @@ export class GameEngine {
   private running: boolean = false;
   private listeners: Map<GameEventType, GameEventListener[]> = new Map();
   private nearMissCountry: Country | null = null;
+  private cachedPrompt: PromptData | null = null;
+  private cachedPromptCountryId: string | null = null;
 
   // Per-country hint state: countryId -> number of revealed chars
   private hintStates: Map<string, number> = new Map();
 
   // Centroid lookup for geographic distance (set externally from WorldMap)
   private centroids: Map<string, [number, number]> = new Map();
+
+  // Extra countries (territories) to include in the pool
+  private extraCountries: Country[] = [];
+
+  // Recently skipped country IDs — used to prevent skip cycles
+  private skipHistory: string[] = [];
 
   on(type: GameEventType, listener: GameEventListener): void {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
@@ -57,6 +65,10 @@ export class GameEngine {
     this.centroids = centroids;
   }
 
+  setExtraCountries(extras: Country[]): void {
+    this.extraCountries = extras;
+  }
+
   start(config: GameConfig, adapter: ModeAdapter): void {
     if (this.timerInterval) {
       clearInterval(this.timerInterval);
@@ -70,14 +82,18 @@ export class GameEngine {
     this.hintsUsed = 0;
     this.currentIndex = 0;
     this.nearMissCountry = null;
+    this.cachedPrompt = null;
+    this.cachedPromptCountryId = null;
     this.hintStates = new Map();
+    this.skipHistory = [];
     this.running = true;
 
     // Filter countries by continent
+    const base = [...allCountries, ...this.extraCountries];
     let filtered =
       config.continent === 'World'
-        ? [...allCountries]
-        : allCountries.filter((c) => c.continent === config.continent);
+        ? [...base]
+        : base.filter((c) => c.continent === config.continent);
 
     // Shuffle
     for (let i = filtered.length - 1; i > 0; i--) {
@@ -145,7 +161,19 @@ export class GameEngine {
     if (!this.running) return null;
     const country = this.currentCountry;
     if (!country) return null;
-    return this.adapter.getPrompt(country, this.pool);
+    // Return cached prompt if still for the same country (prevents reshuffle)
+    if (this.cachedPrompt && this.cachedPromptCountryId === country.id) {
+      return this.cachedPrompt;
+    }
+    const prompt = this.adapter.getPrompt(country, this.pool);
+    this.cachedPrompt = prompt;
+    this.cachedPromptCountryId = country.id;
+    return prompt;
+  }
+
+  private invalidatePromptCache(): void {
+    this.cachedPrompt = null;
+    this.cachedPromptCountryId = null;
   }
 
   submitGuess(input: string): GuessResult {
@@ -196,6 +224,7 @@ export class GameEngine {
     this.guessed.add(country.id);
     this.hintRevealed = 0;
     this.nearMissCountry = null;
+    this.invalidatePromptCache();
     this.emit({ type: 'correct', result, country });
 
     if (this.guessed.size >= this.pool.length) {
@@ -276,15 +305,34 @@ export class GameEngine {
 
     const current = this.pool[this.currentIndex];
 
-    // Use geographic advance logic (same as after correct answer)
-    // to pick the next country instead of just moving to pool end
+    // Track this skip to prevent short cycles
+    if (current) {
+      this.skipHistory.push(current.id);
+      // Keep a window proportional to pool size (at least 5, up to 20% of pool)
+      const maxHistory = Math.max(5, Math.floor(this.pool.length * 0.2));
+      if (this.skipHistory.length > maxHistory) {
+        this.skipHistory.splice(0, this.skipHistory.length - maxHistory);
+      }
+    }
+
+    // Build exclusion set from recent skip history
+    const skipExclusions = new Set(this.skipHistory);
+
     if (this.config.mode === 1 && current) {
-      const nearest = this.findNearestGeographic(current);
+      // Try nearest neighbor excluding recently skipped
+      const nearest = this.findNearestGeographic(current, skipExclusions);
       if (nearest) {
         const idx = this.pool.indexOf(nearest);
         if (idx >= 0) this.currentIndex = idx;
       } else {
-        this.findNextUnguessed();
+        // All neighbors were in skip history — relax and just exclude current
+        const fallback = this.findNearestGeographic(current, new Set([current.id]));
+        if (fallback) {
+          const idx = this.pool.indexOf(fallback);
+          if (idx >= 0) this.currentIndex = idx;
+        } else {
+          this.findNextUnguessed();
+        }
       }
     } else {
       if (current && !this.guessed.has(current.id)) {
@@ -295,6 +343,7 @@ export class GameEngine {
       }
     }
 
+    this.invalidatePromptCache();
     this.emit({ type: 'skip' });
     this.emitNext();
   }
@@ -310,6 +359,7 @@ export class GameEngine {
     this.currentIndex = idx;
     this.hintRevealed = this.hintStates.get(countryId) || 0;
     this.nearMissCountry = null;
+    this.invalidatePromptCache();
     this.emitNext();
     return true;
   }
@@ -332,6 +382,7 @@ export class GameEngine {
       hintsUsed: this.hintsUsed,
       guessedCountries,
       missedCountries,
+      modeName: this.adapter?.modeName,
     };
 
     this.emit({ type: 'end', gameResult: result });
@@ -339,6 +390,9 @@ export class GameEngine {
   }
 
   private advanceToNext(lastCorrect: Country): void {
+    // Correct answer breaks any skip cycle
+    this.skipHistory = [];
+
     if (this.config.mode === 2) {
       this.emitNext();
       return;
@@ -371,13 +425,23 @@ export class GameEngine {
   }
 
   /**
+   * Get a random unguessed country (for the 'Find' feature in free-type mode).
+   */
+  getRandomUnguessedCountry(): Country | null {
+    const remaining = this.pool.filter((c) => !this.guessed.has(c.id));
+    if (remaining.length === 0) return null;
+    return remaining[Math.floor(Math.random() * remaining.length)];
+  }
+
+  /**
    * Find the nearest unguessed country by geographic distance using projected centroids.
    * Prefers same-continent countries. Within the same continent, picks the closest
    * by Euclidean distance in projected coordinates (which roughly maps to geographic
    * proximity, biased slightly rightward/eastward due to the projection).
    */
-  private findNearestGeographic(lastCorrect: Country): Country | null {
-    const remaining = this.pool.filter((c) => !this.guessed.has(c.id));
+  private findNearestGeographic(lastCorrect: Country, excludeIds?: Set<string>): Country | null {
+    const excluded = excludeIds || new Set<string>();
+    const remaining = this.pool.filter((c) => !this.guessed.has(c.id) && !excluded.has(c.id));
     if (remaining.length === 0) return null;
 
     const lastCentroid = this.centroids.get(lastCorrect.id);

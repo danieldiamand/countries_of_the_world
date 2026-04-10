@@ -37,7 +37,7 @@ export class WorldMap {
   private hoveredId: string | null = null;
   private zoom!: d3.ZoomBehavior<HTMLCanvasElement, unknown>;
   private currentTransform: d3.ZoomTransform = d3.zoomIdentity;
-  private onCountryClick: ((countryId: string) => void) | null = null;
+  private onCountryClick: ((countryId: string, rawId?: string, isOverseas?: boolean) => void) | null = null;
   private onCountryHover: ((countryId: string | null) => void) | null = null;
   private loaded: boolean = false;
   private width: number = 0;
@@ -49,6 +49,16 @@ export class WorldMap {
 
   // Active country IDs (for greying out non-active countries)
   private activeCountryIds: Set<string> | null = null;
+
+  // Territory→parent mapping (disabled territories map clicks to parent)
+  private territoryParentMap: Map<string, string> = new Map();
+
+  // Gravity center: projected [x,y] that the view drifts towards at max zoom-out
+  private gravityCenter: [number, number] | null = null;
+
+  // Fade-out entries: countryId → { start, duration } for smooth green→land fade
+  private fadeOutEntries: Map<string, { start: number; duration: number }> = new Map();
+  private fadeAnimFrame: number | null = null;
 
   constructor(container: HTMLElement) {
     this.canvas = document.createElement('canvas');
@@ -90,16 +100,54 @@ export class WorldMap {
   }
 
   private setupZoom(): void {
+    // Threshold: below this scale, scroll-out stops zooming and pans to center instead.
+    const PAN_THRESHOLD = 1.18;
+
     this.zoom = d3
       .zoom<HTMLCanvasElement, unknown>()
-      .scaleExtent([1, 12])
+      .scaleExtent([1, 20])
       .on('zoom', (event: d3.D3ZoomEvent<HTMLCanvasElement, unknown>) => {
-        this.currentTransform = event.transform;
+        const t = event.transform;
+        this.currentTransform = t;
         this.render();
       });
 
+    // Intercept wheel events BEFORE d3's zoom handler (capture phase).
+    // Below PAN_THRESHOLD, redirect zoom-out into smooth pan-to-center.
+    this.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const k = this.currentTransform.k;
+
+      // Only intercept zoom-out when below threshold and gravity center is set
+      if (e.deltaY > 0 && k <= PAN_THRESHOLD && this.gravityCenter) {
+        // Compute how far from centered we are
+        const [gcx, gcy] = this.gravityCenter;
+        const targetX = this.width / 2 - gcx;
+        const targetY = this.height / 2 - gcy;
+        const dx = targetX - this.currentTransform.x;
+        const dy = targetY - this.currentTransform.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist > 1) {
+          // Pan toward center: strength proportional to scroll amount
+          const panStrength = Math.min(0.35, e.deltaY * 0.004);
+          const newX = this.currentTransform.x + dx * panStrength;
+          const newY = this.currentTransform.y + dy * panStrength;
+          // Also ease scale toward 1
+          const newK = k + (1 - k) * panStrength;
+          const newTransform = d3.zoomIdentity.translate(newX, newY).scale(newK);
+          this.currentTransform = newTransform;
+          (this.canvas as any).__zoom = newTransform;
+          this.render();
+          // Stop the event from reaching d3's zoom handler
+          e.stopImmediatePropagation();
+          return;
+        }
+      }
+      // Otherwise let d3 handle normally (zoom-in, or zoom-out above threshold)
+    }, { capture: true, passive: false });
+
     d3.select(this.canvas).call(this.zoom);
-    this.canvas.addEventListener('wheel', (e) => { e.preventDefault(); }, { passive: false });
   }
 
   private setupInteractions(): void {
@@ -117,7 +165,10 @@ export class WorldMap {
     this.canvas.addEventListener('click', (e) => {
       const country = this.hitTest(e.offsetX, e.offsetY);
       if (country?.id) {
-        this.onCountryClick?.(country.id.toString());
+        const rawId = country.id.toString();
+        const mappedId = this.territoryParentMap.get(rawId) ?? rawId;
+        const overseas = this.isOverseasClick(mappedId, e.offsetX, e.offsetY);
+        this.onCountryClick?.(mappedId, rawId !== mappedId ? rawId : undefined, overseas || undefined);
       }
     });
 
@@ -139,7 +190,10 @@ export class WorldMap {
           const y = touch.clientY - rect.top;
           const country = this.hitTest(x, y);
           if (country?.id) {
-            this.onCountryClick?.(country.id.toString());
+            const rawId = country.id.toString();
+            const mappedId = this.territoryParentMap.get(rawId) ?? rawId;
+            const overseas = this.isOverseasClick(mappedId, x, y);
+            this.onCountryClick?.(mappedId, rawId !== mappedId ? rawId : undefined, overseas || undefined);
           }
         }
         touchStart = null;
@@ -157,6 +211,31 @@ export class WorldMap {
     return null;
   }
 
+  /**
+   * For countries with overseas territories embedded in their multipolygon
+   * (e.g., France includes French Guiana), detect if a click at screen
+   * coords (px, py) landed on an overseas part. Returns true if the click
+   * geo-coords are far from the metropolitan center.
+   */
+  private isOverseasClick(countryId: string, px: number, py: number): boolean {
+    // Metropolitan bounding boxes [lonMin, latMin, lonMax, latMax]
+    const METRO_BOUNDS: Record<string, [number, number, number, number]> = {
+      '250': [-5, 41, 10, 51.5],     // France → metropolitan
+      '840': [-130, 24, -65, 50],     // USA → contiguous 48
+      '528': [3, 50, 8, 54],          // Netherlands → European
+      '208': [7, 54, 16, 58],         // Denmark → Jutland + islands
+    };
+    const metro = METRO_BOUNDS[countryId];
+    if (!metro) return false;
+
+    const [tx, ty] = this.currentTransform.invert([px, py]);
+    const geo = this.projection.invert?.([tx, ty]);
+    if (!geo) return false;
+
+    const [lon, lat] = geo;
+    return lon < metro[0] || lon > metro[2] || lat < metro[1] || lat > metro[3];
+  }
+
   private computeCentroids(): void {
     this.centroids.clear();
 
@@ -166,9 +245,11 @@ export class WorldMap {
       '250': [2.5, 46.5],   // France → metropolitan France, not French Guiana
       '840': [-98, 39],     // USA → contiguous US, not pulled by Alaska/Hawaii
       '528': [5.5, 52.3],   // Netherlands → European Netherlands
-      '643': [40, 56],      // Russia → Moscow area, not middle of Siberia
       '124': [-96, 56],     // Canada → southern populated area
       '156': [104, 35],     // China → central China
+      '643': [90, 62],      // Russia → geographic center of landmass
+      '554': [174, -41],    // New Zealand → North/South Island center
+      '242': [178, -18],    // Fiji → main islands
     };
 
     for (const feature of this.features) {
@@ -224,8 +305,27 @@ export class WorldMap {
     this.render();
   }
 
-  setClickHandler(handler: (countryId: string) => void): void {
+  setClickHandler(handler: (countryId: string, rawId?: string, isOverseas?: boolean) => void): void {
     this.onCountryClick = handler;
+  }
+
+  setTerritoryParentMap(map: Map<string, string>): void {
+    this.territoryParentMap = map;
+  }
+
+  /**
+   * Set gravity center in lon/lat. When fully zoomed out, the view gently
+   * drifts toward this point.  Pass null to use default (map center).
+   */
+  setGravityCenter(lonLat: [number, number] | null): void {
+    if (!lonLat) {
+      this.gravityCenter = null;
+      return;
+    }
+    const projected = this.projection(lonLat);
+    if (projected) {
+      this.gravityCenter = [projected[0], projected[1]];
+    }
   }
 
   setHoverHandler(handler: (countryId: string | null) => void): void {
@@ -233,7 +333,49 @@ export class WorldMap {
   }
 
   setCountryState(countryId: string, state: CountryState): void {
+    // If setting to a concrete state, cancel any active fade for this country
+    this.fadeOutEntries.delete(countryId);
     this.countryStates.set(countryId, state);
+    this.render();
+  }
+
+  /**
+   * Fade a country from its current color (typically 'correct') to 'default'
+   * over the given duration (ms). Starts a render loop for smooth animation.
+   */
+  fadeOutCountry(countryId: string, duration: number = 800): void {
+    this.fadeOutEntries.set(countryId, { start: performance.now(), duration });
+    this.startFadeLoop();
+  }
+
+  private startFadeLoop(): void {
+    if (this.fadeAnimFrame !== null) return; // already running
+    const tick = () => {
+      const now = performance.now();
+      let anyActive = false;
+      for (const [id, entry] of this.fadeOutEntries) {
+        const elapsed = now - entry.start;
+        if (elapsed >= entry.duration) {
+          this.fadeOutEntries.delete(id);
+          this.countryStates.set(id, 'default');
+        } else {
+          anyActive = true;
+        }
+      }
+      this.render();
+      if (anyActive) {
+        this.fadeAnimFrame = requestAnimationFrame(tick);
+      } else {
+        this.fadeAnimFrame = null;
+      }
+    };
+    this.fadeAnimFrame = requestAnimationFrame(tick);
+  }
+
+  batchSetCountryStates(states: Map<string, CountryState>): void {
+    for (const [id, state] of states) {
+      this.countryStates.set(id, state);
+    }
     this.render();
   }
 
@@ -266,12 +408,25 @@ export class WorldMap {
   }
 
   /**
-   * Smart fly-to: only pans if the country isn't already reasonably visible.
-   * Uses a "dead zone" — if the country centroid is within the inner 60% of the
-   * screen and the country bounding box fits on screen at current zoom, skip the pan.
-   * Animation is interruptible: calling flyTo again cancels any in-progress transition.
+   * Smart fly-to: pans to center the country. Adjusts zoom automatically.
+   * Options:
+   *   forceCenter: always pan to center (no dead-zone skip)
+   *   maxScale: cap the zoom level (for gentler zoom in some modes)
+   *   viewportFraction: how much of the viewport the country should fill (default 0.4)
+   *   durationMultiplier: multiply duration for slower pans (default 1)
+   *   preferPanOnly: if true, prefer panning without zoom changes when country is visible
    */
-  flyTo(countryId: string, duration: number = 750): void {
+  flyTo(
+    countryId: string,
+    duration: number = 750,
+    forceCenter: boolean = false,
+    options?: {
+      maxScale?: number;
+      viewportFraction?: number;
+      durationMultiplier?: number;
+      preferPanOnly?: boolean;
+    }
+  ): void {
     const feature = this.features.find((f) => f.id?.toString() === countryId);
     if (!feature || !this.path) return;
 
@@ -287,16 +442,47 @@ export class WorldMap {
     const cx = storedCentroid ? storedCentroid[0] : (bx0 + bx1) / 2;
     const cy = storedCentroid ? storedCentroid[1] : (by0 + by1) / 2;
 
-    // Use centroid-based virtual bounds for countries with large overseas territories
-    const LARGE_IDS = new Set(['250', '840', '528', '643', '124', '156']);
+    // Per-country virtual bounds for countries with overseas territories.
+    // Values are fractions of viewport size representing the metropolitan area.
+    const VIRTUAL_BOUNDS: Record<string, number> = {
+      '250': 0.06,   // France → metropolitan France (not pulled by French Guiana)
+      '840': 0.20,   // USA → contiguous states
+      '528': 0.02,   // Netherlands → European Netherlands
+      '124': 0.22,   // Canada
+      '156': 0.18,   // China
+      '643': 0.22,   // Russia → large landmass
+      '554': 0.06,   // New Zealand → islands
+      '242': 0.03,   // Fiji → small islands
+    };
     let dx: number, dy: number;
-    if (LARGE_IDS.has(countryId)) {
-      dx = this.width * 0.15;
-      dy = this.height * 0.15;
+    const vbRatio = VIRTUAL_BOUNDS[countryId];
+    if (vbRatio !== undefined) {
+      dx = this.width * vbRatio;
+      dy = this.height * vbRatio;
     } else {
       dx = bx1 - bx0;
       dy = by1 - by0;
     }
+
+    // Fixed zoom tiers — nearly all countries share the STANDARD zoom.
+    // Only exceptional cases get their own tier. This prevents the
+    // "rollercoaster" effect when clicking between similarly-sized countries.
+    const MASSIVE_IDS = new Set(['643', '124']);            // Russia, Canada
+    const BIG_IDS = new Set(['840', '156', '076', '036']); // USA, China, Brazil, Australia
+    const VERY_BIG_IDS = new Set(['356', '032', '398', '010']); // India, Argentina, Kazakhstan, Antarctica
+    const TINY_IDS = new Set([                              // Microstates & very small countries
+      '336', '674', '492', '438',                           // Vatican, San Marino, Monaco, Liechtenstein
+      '442', '470', '020', '048', '702',                    // Luxembourg, Malta, Andorra, Bahrain, Singapore
+    ]);
+
+    // Determine fixed target scale based on tier.
+    // These are absolute zoom levels, not viewport fractions.
+    let fixedScale: number | null = null;
+    if (MASSIVE_IDS.has(countryId)) fixedScale = 2.2;
+    else if (BIG_IDS.has(countryId)) fixedScale = 3.0;
+    else if (VERY_BIG_IDS.has(countryId)) fixedScale = 3.8;
+    else if (TINY_IDS.has(countryId)) fixedScale = 16;
+    else fixedScale = 5.0; // STANDARD — the one zoom for nearly all countries
 
     // Where is the country centroid in *screen* coordinates right now?
     const [screenX, screenY] = this.currentTransform.apply([cx, cy]);
@@ -310,24 +496,132 @@ export class WorldMap {
       screenY > marginY &&
       screenY < this.height - marginY;
 
-    // If centroid is in the dead zone, skip pan entirely
-    if (inDeadZone) {
+    const maxScale = options?.maxScale ?? 20;
+    const durationMult = options?.durationMultiplier ?? 1;
+    const preferPanOnly = options?.preferPanOnly ?? false;
+
+    // Use the explicit viewportFraction if provided (legacy callers),
+    // otherwise use the fixed scale tier.
+    let clampedIdeal: number;
+    if (options?.viewportFraction != null) {
+      const idealScale = Math.min(
+        (this.width * options.viewportFraction) / Math.max(dx, 1),
+        (this.height * options.viewportFraction) / Math.max(dy, 1)
+      );
+      clampedIdeal = Math.max(1, Math.min(maxScale, idealScale));
+    } else {
+      clampedIdeal = Math.max(1, Math.min(maxScale, fixedScale));
+    }
+
+    let targetScale: number;
+    if (preferPanOnly) {
+      // Only change zoom if the difference is large (> 2x)
+      const zoomRatio = clampedIdeal / this.currentTransform.k;
+      if (zoomRatio > 2 || zoomRatio < 0.5) {
+        targetScale = clampedIdeal;
+      } else {
+        targetScale = this.currentTransform.k;
+      }
+    } else {
+      targetScale = clampedIdeal;
+    }
+
+    // If centroid is already centered and zoom matches, skip (unless forceCenter)
+    if (!forceCenter && inDeadZone && Math.abs(targetScale - this.currentTransform.k) < 0.05) {
       return;
     }
 
-    // PAN ONLY — keep current zoom level, just center on the country
-    const targetScale = this.currentTransform.k;
+    const actualDuration = duration * durationMult;
 
-    const transform = d3.zoomIdentity
+    const t0 = this.currentTransform;
+    const t1 = d3.zoomIdentity
       .translate(this.width / 2, this.height / 2)
       .scale(targetScale)
       .translate(-cx, -cy);
 
+    // Interpolate transform components directly in screen space.
+    // This keeps pan and zoom perfectly synced throughout the animation.
+    d3.select(this.canvas)
+      .transition()
+      .duration(actualDuration)
+      .ease(d3.easeCubicInOut)
+      .tween('zoom', () => {
+        const ix = d3.interpolateNumber(t0.x, t1.x);
+        const iy = d3.interpolateNumber(t0.y, t1.y);
+        const ik = d3.interpolateNumber(t0.k, t1.k);
+        return (t: number) => {
+          this.currentTransform = d3.zoomIdentity
+            .translate(ix(t), iy(t))
+            .scale(ik(t));
+          (this.canvas as any).__zoom = this.currentTransform;
+          this.render();
+        };
+      });
+  }
+
+  /**
+   * Zoom to show two features at once (e.g. territory + parent country).
+   * Computes a bounding box that contains both centroids with padding.
+   */
+  flyToShowBoth(id1: string, id2: string, duration: number = 750): void {
+    d3.select(this.canvas).interrupt();
+
+    let minX: number, maxX: number, minY: number, maxY: number;
+
+    if (id1 === id2) {
+      // Same country — show the full extent of all its polygons (e.g. France + French Guiana)
+      const feature = this.features.find((f) => f.id?.toString() === id1);
+      if (!feature) { this.flyTo(id1, duration, true); return; }
+      const bounds = this.path.bounds(feature as any);
+      if (!bounds) { this.flyTo(id1, duration, true); return; }
+      [[minX, minY], [maxX, maxY]] = bounds;
+    } else {
+      const c1 = this.centroids.get(id1);
+      const c2 = this.centroids.get(id2);
+      if (!c1 || !c2) { this.flyTo(id1, duration, true); return; }
+      minX = Math.min(c1[0], c2[0]);
+      maxX = Math.max(c1[0], c2[0]);
+      minY = Math.min(c1[1], c2[1]);
+      maxY = Math.max(c1[1], c2[1]);
+    }
+
+    // Bounding box with generous padding
+    const padX = Math.max((maxX - minX) * 0.5, this.width * 0.12);
+    const padY = Math.max((maxY - minY) * 0.5, this.height * 0.12);
+
+    const dx = (maxX - minX) + padX * 2;
+    const dy = (maxY - minY) + padY * 2;
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+
+    // Scale to fit both features with breathing room (0.85 factor)
+    const targetScale = Math.max(1, Math.min(20,
+      0.85 * Math.min(this.width / Math.max(dx, 1), this.height / Math.max(dy, 1))
+    ));
+
+    const t0 = this.currentTransform;
+    const t1 = d3.zoomIdentity
+      .translate(this.width / 2, this.height / 2)
+      .scale(targetScale)
+      .translate(-cx, -cy);
+
+    // Screen-space interpolation keeps pan and zoom perfectly synced
     d3.select(this.canvas)
       .transition()
       .duration(duration)
       .ease(d3.easeCubicInOut)
-      .call(this.zoom.transform as any, transform);
+      .tween('zoom', () => {
+        const ix = d3.interpolateNumber(t0.x, t1.x);
+        const iy = d3.interpolateNumber(t0.y, t1.y);
+        const ik = d3.interpolateNumber(t0.k, t1.k);
+        return (t: number) => {
+          this.currentTransform = d3.zoomIdentity
+            .translate(ix(t), iy(t))
+            .scale(ik(t));
+          (this.canvas as any).__zoom = this.currentTransform;
+          this.render();
+        };
+      });
   }
 
   resetZoom(duration: number = 500): void {
@@ -343,12 +637,12 @@ export class WorldMap {
    */
   zoomToContinent(continent: string): void {
     const CONTINENT_BOUNDS: Record<string, { center: [number, number]; scale: number }> = {
-      'Africa': { center: [20, 0], scale: 2.2 },
-      'Asia': { center: [90, 30], scale: 2 },
-      'Europe': { center: [15, 52], scale: 3.5 },
-      'North America': { center: [-95, 40], scale: 2.2 },
-      'South America': { center: [-60, -15], scale: 2.2 },
-      'Oceania': { center: [140, -25], scale: 2.5 },
+      'Africa': { center: [20, 2], scale: 1.8 },
+      'Asia': { center: [90, 30], scale: 1.7 },
+      'Europe': { center: [15, 52], scale: 2.8 },
+      'North America': { center: [-95, 40], scale: 1.9 },
+      'South America': { center: [-60, -15], scale: 1.9 },
+      'Oceania': { center: [140, -25], scale: 2.2 },
     };
     const region = CONTINENT_BOUNDS[continent];
     if (!region) return;
@@ -375,14 +669,160 @@ export class WorldMap {
   }
 
   /**
+   * Smoothly pan to a continent view centered on a specific country's continent.
+   * Offset upward to account for bottom HUD bar. Uses slower animation.
+   */
+  panToContinent(continent: string, duration: number = 900): void {
+    const CONTINENT_BOUNDS: Record<string, { center: [number, number]; scale: number }> = {
+      'Africa': { center: [20, 2], scale: 1.8 },
+      'Asia': { center: [90, 30], scale: 1.7 },
+      'Europe': { center: [15, 52], scale: 2.8 },
+      'North America': { center: [-95, 40], scale: 1.9 },
+      'South America': { center: [-60, -15], scale: 1.9 },
+      'Oceania': { center: [140, -25], scale: 2.2 },
+    };
+    const region = CONTINENT_BOUNDS[continent];
+    if (!region) return;
+    const projected = this.projection(region.center);
+    if (!projected) return;
+
+    d3.select(this.canvas).interrupt();
+
+    // Offset center upward by ~6% of viewport to account for bottom HUD
+    const yOffset = this.height * 0.06;
+
+    const t0 = this.currentTransform;
+    const t1 = d3.zoomIdentity
+      .translate(this.width / 2, this.height / 2 - yOffset)
+      .scale(region.scale)
+      .translate(-projected[0], -projected[1]);
+
+    // Only pan if we're not already viewing this continent (within tolerance)
+    const dx = Math.abs(t0.x - t1.x);
+    const dy = Math.abs(t0.y - t1.y);
+    const dk = Math.abs(t0.k - t1.k);
+    if (dx < 20 && dy < 20 && dk < 0.2) return;
+
+    d3.select(this.canvas)
+      .transition()
+      .duration(duration)
+      .ease(d3.easeCubicInOut)
+      .tween('zoom', () => {
+        const ix = d3.interpolateNumber(t0.x, t1.x);
+        const iy = d3.interpolateNumber(t0.y, t1.y);
+        const ik = d3.interpolateNumber(t0.k, t1.k);
+        return (t: number) => {
+          this.currentTransform = d3.zoomIdentity
+            .translate(ix(t), iy(t))
+            .scale(ik(t));
+          (this.canvas as any).__zoom = this.currentTransform;
+          this.render();
+        };
+      });
+  }
+
+  /**
    * Set zoom level programmatically (for +/- buttons).
+   * When zooming out near minimum, smoothly pan to centered world view.
    */
   zoomBy(factor: number): void {
     d3.select(this.canvas).interrupt();
+    const currentK = this.currentTransform.k;
+    const newK = Math.max(1, Math.min(20, currentK * factor));
+
+    // When zooming out to near minimum, smoothly center the view
+    if (factor < 1 && newK <= 1.18) {
+      // Animate to scale 1, centered on gravity center (or default center)
+      let targetTransform: d3.ZoomTransform;
+      if (this.gravityCenter) {
+        const [gcx, gcy] = this.gravityCenter;
+        targetTransform = d3.zoomIdentity
+          .translate(this.width / 2 - gcx, this.height / 2 - gcy);
+      } else {
+        targetTransform = d3.zoomIdentity;
+      }
+
+      // Use manual tween for smooth straight-line animation
+      const t0 = this.currentTransform;
+      const t1 = targetTransform;
+      const c0x = (this.width / 2 - t0.x) / t0.k;
+      const c0y = (this.height / 2 - t0.y) / t0.k;
+      const c1x = (this.width / 2 - t1.x) / Math.max(t1.k, 1);
+      const c1y = (this.height / 2 - t1.y) / Math.max(t1.k, 1);
+
+      d3.select(this.canvas)
+        .transition()
+        .duration(400)
+        .ease(d3.easeCubicOut)
+        .tween('zoom', () => {
+          const ik = d3.interpolateNumber(t0.k, 1);
+          const icx = d3.interpolateNumber(c0x, c1x);
+          const icy = d3.interpolateNumber(c0y, c1y);
+          return (t: number) => {
+            const k = ik(t);
+            const cx = icx(t);
+            const cy = icy(t);
+            const x = this.width / 2 - k * cx;
+            const y = this.height / 2 - k * cy;
+            this.currentTransform = d3.zoomIdentity.translate(x, y).scale(k);
+            (this.canvas as any).__zoom = this.currentTransform;
+            this.render();
+          };
+        });
+      return;
+    }
+
+    // Normal zoom: use manual tween for consistent animation
+    const t0 = this.currentTransform;
+    const cx = (this.width / 2 - t0.x) / t0.k;
+    const cy = (this.height / 2 - t0.y) / t0.k;
+    const t1 = d3.zoomIdentity
+      .translate(this.width / 2, this.height / 2)
+      .scale(newK)
+      .translate(-cx, -cy);
+
     d3.select(this.canvas)
       .transition()
       .duration(200)
-      .call(this.zoom.scaleBy as any, factor);
+      .ease(d3.easeCubicOut)
+      .tween('zoom', () => {
+        const ik = d3.interpolateNumber(t0.k, newK);
+        const ic0x = d3.interpolateNumber(
+          (this.width / 2 - t0.x) / t0.k,
+          (this.width / 2 - t1.x) / t1.k
+        );
+        const ic0y = d3.interpolateNumber(
+          (this.height / 2 - t0.y) / t0.k,
+          (this.height / 2 - t1.y) / t1.k
+        );
+        return (t: number) => {
+          const k = ik(t);
+          const cxx = ic0x(t);
+          const cyy = ic0y(t);
+          const x = this.width / 2 - k * cxx;
+          const y = this.height / 2 - k * cyy;
+          this.currentTransform = d3.zoomIdentity.translate(x, y).scale(k);
+          (this.canvas as any).__zoom = this.currentTransform;
+          this.render();
+        };
+      });
+  }
+
+  private lerpColor(a: string, b: string, t: number): string {
+    const pa = this.parseHex(a), pb = this.parseHex(b);
+    const r = Math.round(pa[0] + (pb[0] - pa[0]) * t);
+    const g = Math.round(pa[1] + (pb[1] - pa[1]) * t);
+    const bl = Math.round(pa[2] + (pb[2] - pa[2]) * t);
+    return `rgb(${r},${g},${bl})`;
+  }
+
+  private parseHex(hex: string): [number, number, number] {
+    const h = hex.replace('#', '');
+    return [
+      parseInt(h.substring(0, 2), 16),
+      parseInt(h.substring(2, 4), 16),
+      parseInt(h.substring(4, 6), 16),
+    ];
   }
 
   render(): void {
@@ -408,8 +848,15 @@ export class WorldMap {
 
       const isGreyedOut = this.activeCountryIds !== null && id !== '' && !this.activeCountryIds.has(id);
 
-      if (isGreyedOut) {
-        ctx.fillStyle = '#F0EDE9';
+      // Check if this country is fading out (green → land)
+      const fadeEntry = this.fadeOutEntries.get(id);
+      if (fadeEntry && !isGreyedOut) {
+        const elapsed = performance.now() - fadeEntry.start;
+        const t = Math.min(1, elapsed / fadeEntry.duration);
+        const eased = t < 1 ? t * t * (3 - 2 * t) : 1; // smoothstep
+        ctx.fillStyle = this.lerpColor(MAP_COLORS.correct, MAP_COLORS.land, eased);
+      } else if (isGreyedOut) {
+        ctx.fillStyle = '#D4CDC5';
       } else if (state === 'correct') ctx.fillStyle = MAP_COLORS.correct;
       else if (state === 'hinted') ctx.fillStyle = MAP_COLORS.hinted;
       else if (state === 'selected') ctx.fillStyle = MAP_COLORS.selected;

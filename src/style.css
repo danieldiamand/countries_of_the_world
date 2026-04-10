@@ -100,10 +100,108 @@ html, body {
 
 /* ── Start Screen ─────────────────────────────────────── */
 .start-screen {
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(6px);
+  background: transparent;
   padding: 24px;
+  position: relative;
+  pointer-events: none;
+}
+
+.start-screen > * {
+  pointer-events: auto;
+}
+
+/* Settings Gear */
+.settings-gear {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 15;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  color: var(--color-text-muted);
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(6px);
+  border: 1.5px solid var(--color-card-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  padding: 0;
+  line-height: 1;
+}
+
+.settings-gear:hover {
+  color: var(--color-text);
+  background: var(--color-surface-pressed);
+  box-shadow: var(--shadow-md);
+}
+
+/* Settings Panel */
+.settings-panel {
+  position: absolute;
+  top: 58px;
+  right: 16px;
+  z-index: 15;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(12px);
+  border: 1.5px solid var(--color-card-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 16px 18px;
+  width: 260px;
+  max-height: 400px;
   overflow-y: auto;
+}
+
+.settings-panel.hidden {
+  display: none;
+}
+
+.settings-panel h3 {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 2px;
+}
+
+.settings-desc {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  margin-bottom: 12px;
+}
+
+.territory-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: var(--color-text);
+  border-bottom: 1px solid var(--color-card-border);
+}
+
+.territory-toggle:last-child {
+  border-bottom: none;
+}
+
+.territory-toggle input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--color-correct);
+  flex-shrink: 0;
+}
+
+.territory-flag {
+  width: 22px;
+  height: 16px;
+  object-fit: contain;
+  border-radius: 2px;
+  flex-shrink: 0;
 }
 
 .start-inner {
@@ -112,6 +210,12 @@ html, body {
   align-items: center;
   max-width: 640px;
   width: 100%;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: var(--radius-lg);
+  padding: 28px 32px;
+  box-shadow: var(--shadow-lg);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
 }
 
 .start-screen h1 {
@@ -307,6 +411,8 @@ html, body {
   font-weight: 600;
   color: var(--color-text);
   font-variant-numeric: tabular-nums;
+  display: flex;
+  gap: 12px;
 }
 
 .hud-timer {
@@ -340,6 +446,39 @@ html, body {
   color: var(--color-text);
 }
 
+/* Progress Tracker (flag/capital modes) */
+.progress-tracker {
+  display: flex;
+  gap: 3px;
+  padding: 4px 16px;
+  justify-content: center;
+  flex-wrap: wrap;
+  max-width: 100%;
+  pointer-events: none;
+}
+
+.progress-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-card-border);
+  transition: background var(--transition-fast), transform var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.progress-dot.current {
+  background: var(--color-selected);
+  transform: scale(1.3);
+}
+
+.progress-dot.correct {
+  background: var(--color-correct);
+}
+
+.progress-dot.skipped {
+  background: var(--color-missed);
+}
+
 /* Bottom Bar */
 .hud-bottom {
   display: flex;
@@ -348,8 +487,6 @@ html, body {
   padding: 0 16px 16px;
   gap: 10px;
   pointer-events: none;
-  background: linear-gradient(to top, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.6) 60%, transparent 100%);
-  padding-top: 24px;
 }
 
 .hud-bottom > * {
@@ -494,6 +631,21 @@ html, body {
   color: var(--color-text);
 }
 
+.choice-skip-btn {
+  margin-top: 0;
+  align-self: center;
+}
+
+/* Choices wrapper: choices + skip side by side */
+.choices-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: center;
+  width: 100%;
+  max-width: 760px;
+}
+
 /* Multiple Choice */
 .choices-row {
   display: flex;
@@ -560,6 +712,24 @@ html, body {
   transform: scale(1.03);
 }
 
+.flag-choice.disabled {
+  cursor: default;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.flag-choice.correct {
+  border-color: var(--color-correct);
+  box-shadow: 0 0 0 3px var(--color-correct-light), var(--shadow-md);
+  transform: scale(1.05);
+}
+
+.flag-choice.wrong {
+  border-color: var(--color-missed);
+  box-shadow: 0 0 0 3px var(--color-missed-light);
+  opacity: 0.6;
+}
+
 /* ── Feedback Toast ───────────────────────────────────── */
 .toast-container {
   position: absolute;
@@ -622,47 +792,60 @@ html, body {
 .results-screen {
   background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(12px);
-  padding: 32px 24px;
-  overflow-y: auto;
+  padding: 16px 24px;
+  overflow: hidden;
 }
 
 .results-card {
   background: var(--color-card);
   border: 1.5px solid var(--color-card-border);
   border-radius: var(--radius-lg);
-  padding: 32px;
+  padding: 24px 28px;
   max-width: 480px;
   width: 100%;
   box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 32px);
+}
+
+.results-mode {
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-bottom: 2px;
 }
 
 .results-card h2 {
-  font-size: 1.3rem;
+  font-size: 1.2rem;
   font-weight: 600;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
   letter-spacing: -0.01em;
 }
 
 .stats-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  margin-bottom: 24px;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-shrink: 0;
 }
 
 .stat-item {
   text-align: center;
-  padding: 14px;
+  padding: 10px;
   background: var(--color-surface);
   border-radius: var(--radius-md);
 }
 
 .stat-value {
-  font-size: 1.5rem;
+  font-size: 1.3rem;
   font-weight: 600;
   color: var(--color-text);
   line-height: 1;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 
 .stat-value.hint-color {
@@ -676,42 +859,11 @@ html, body {
   color: var(--color-text-muted);
 }
 
-.missed-list {
-  margin-top: 20px;
-  max-height: 200px;
-  overflow-y: auto;
-  padding-right: 8px;
-}
-
-.missed-list h3 {
-  font-size: 0.82rem;
-  font-weight: 500;
-  color: var(--color-text-muted);
-  letter-spacing: 0.04em;
-  margin-bottom: 10px;
-}
-
-.missed-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--color-card-border);
-  font-size: 0.88rem;
-  color: var(--color-text);
-}
-
-.missed-item img {
-  width: 28px;
-  height: 21px;
-  object-fit: contain;
-  border-radius: 2px;
-}
-
 .results-actions {
   display: flex;
   gap: 10px;
-  margin-top: 24px;
+  margin-top: 16px;
+  flex-shrink: 0;
 }
 
 .results-actions button {
@@ -782,7 +934,7 @@ html, body {
 /* ── Zoom Controls ────────────────────────────────────── */
 .zoom-controls {
   position: absolute;
-  bottom: 80px;
+  bottom: 24px;
   right: 16px;
   display: flex;
   flex-direction: column;
@@ -817,11 +969,15 @@ html, body {
 }
 
 /* ── Result Lists ─────────────────────────────────────── */
-.result-list {
-  margin-top: 16px;
-  max-height: 180px;
+.result-lists-wrapper {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding-right: 8px;
+  padding-right: 4px;
+}
+
+.result-list {
+  margin-top: 12px;
 }
 
 .result-list h3 {
@@ -881,13 +1037,18 @@ html, body {
   }
 
   .prompt-flag {
-    width: 120px;
-    height: 90px;
+    width: 100px;
+    height: 75px;
+  }
+
+  .prompt-area {
+    min-height: 60px;
+    padding: 6px 0;
   }
 
   .prompt-text {
-    font-size: 1rem;
-    padding: 6px 12px;
+    font-size: 0.95rem;
+    padding: 4px 10px;
   }
 
   .guess-input {
@@ -904,11 +1065,101 @@ html, body {
   }
 
   .hud-top {
-    padding: 8px 12px;
+    padding: 6px 10px;
+  }
+
+  .hud-top .hud-score,
+  .hud-top .hud-timer {
+    font-size: 0.88rem;
+  }
+
+  .hud-top .hud-mode-label {
+    font-size: 0.68rem;
   }
 
   .hud-bottom {
-    padding: 0 12px 12px;
+    padding: 0 10px 8px;
+    gap: 6px;
+  }
+
+  .input-row {
+    max-width: 100%;
+  }
+
+  .hint-btn, .skip-btn {
+    padding: 8px 10px;
+    font-size: 0.72rem;
+  }
+
+  .progress-tracker {
+    padding: 2px 10px;
+    gap: 2px;
+  }
+
+  .progress-dot {
+    width: 6px;
+    height: 6px;
+  }
+
+  .choice-btn {
+    min-width: 140px;
+    padding: 10px 14px;
+    font-size: 0.85rem;
+  }
+
+  .flag-choice {
+    width: 90px;
+    height: 67px;
+  }
+
+  .zoom-controls {
+    bottom: 80px;
+    right: 8px;
+  }
+
+  .zoom-btn {
+    width: 30px;
+    height: 30px;
+    font-size: 1rem;
+  }
+
+  .toast {
+    padding: 6px 12px;
+    font-size: 0.82rem;
+  }
+
+  .toast .toast-flag {
+    width: 32px;
+    height: 24px;
+  }
+}
+
+/* Handle mobile virtual keyboard — use dvh for dynamic viewport */
+@supports (height: 1dvh) {
+  .game-hud {
+    height: 100dvh;
+  }
+}
+
+/* Extra small screens (phone in landscape or very small) */
+@media (max-height: 500px) {
+  .prompt-area {
+    min-height: 40px;
+    padding: 2px 0;
+  }
+
+  .prompt-flag {
+    width: 70px;
+    height: 52px;
+  }
+
+  .hud-bottom {
+    padding: 0 8px 4px;
+    gap: 4px;
+  }
+
+  .progress-tracker {
+    padding: 1px 8px;
   }
 }
 

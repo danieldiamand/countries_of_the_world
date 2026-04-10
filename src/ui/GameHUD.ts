@@ -11,10 +11,12 @@ export class GameHUD {
   private input: HTMLInputElement;
   private hintOverlay: HTMLElement;
   private choicesRow: HTMLElement;
+  private choiceSkipBtn: HTMLButtonElement;
   private toastContainer: HTMLElement;
   private scoreEl: HTMLElement;
   private timerEl: HTMLElement;
   private modeLabelEl: HTMLElement;
+
 
   private onGuess: (input: string) => void;
   private onHint: () => void;
@@ -23,6 +25,7 @@ export class GameHUD {
   private onChoice: (index: number) => void;
   private onRevealNearMiss: (() => void) | null = null;
   private onZoom: ((factor: number) => void) | null = null;
+  private onFind: (() => void) | null = null;
 
   private config: GameConfig;
 
@@ -40,6 +43,7 @@ export class GameHUD {
       onChoice: (index: number) => void;
       onRevealNearMiss?: () => void;
       onZoom?: (factor: number) => void;
+      onFind?: () => void;
     }
   ) {
     this.config = config;
@@ -50,6 +54,7 @@ export class GameHUD {
     this.onChoice = callbacks.onChoice;
     this.onRevealNearMiss = callbacks.onRevealNearMiss || null;
     this.onZoom = callbacks.onZoom || null;
+    this.onFind = callbacks.onFind || null;
 
     this.container = document.createElement('div');
     this.container.className = 'game-hud';
@@ -87,6 +92,8 @@ export class GameHUD {
     });
     this.topBar.appendChild(endBtn);
 
+
+
     // Bottom area
     this.bottomBar = document.createElement('div');
     this.bottomBar.className = 'hud-bottom';
@@ -102,11 +109,29 @@ export class GameHUD {
     this.nearMissBar.className = 'near-miss-bar';
     this.bottomBar.appendChild(this.nearMissBar);
 
+    // Choices row wrapper (choices + skip button side by side)
+    const choicesWrapper = document.createElement('div');
+    choicesWrapper.className = 'choices-wrapper';
+    choicesWrapper.style.display = 'none';
+    this.bottomBar.appendChild(choicesWrapper);
+
     // Choices row
     this.choicesRow = document.createElement('div');
     this.choicesRow.className = 'choices-row';
     this.choicesRow.style.display = 'none';
-    this.bottomBar.appendChild(this.choicesRow);
+    choicesWrapper.appendChild(this.choicesRow);
+
+    // Skip button for choice-based modes (to the right of choices)
+    this.choiceSkipBtn = document.createElement('button');
+    this.choiceSkipBtn.className = 'skip-btn choice-skip-btn';
+    this.choiceSkipBtn.textContent = 'Skip';
+    this.choiceSkipBtn.title = 'Skip this question';
+    this.choiceSkipBtn.style.display = 'none';
+    this.choiceSkipBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      this.onSkip();
+    });
+    choicesWrapper.appendChild(this.choiceSkipBtn);
 
     // Input row
     this.inputRow = document.createElement('div');
@@ -129,19 +154,26 @@ export class GameHUD {
     this.input.autocomplete = 'off';
     this.input.autocapitalize = 'off';
     this.input.spellcheck = false;
+    // Prevent mobile keyboard suggestions/autocorrect
+    this.input.setAttribute('autocorrect', 'off');
+    this.input.setAttribute('data-form-type', 'other');
+    this.input.setAttribute('data-lpignore', 'true');
+    this.input.setAttribute('enterkeyhint', 'go');
     inputWrapper.appendChild(this.input);
 
-    // Hint button
-    const hintBtn = document.createElement('button');
-    hintBtn.className = 'hint-btn';
-    hintBtn.textContent = 'Hint';
-    hintBtn.title = 'Reveal a letter';
-    hintBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      this.onHint();
-      this.input.focus();
-    });
-    this.inputRow.appendChild(hintBtn);
+    // Hint button (not for Mode 2 — no target country for hints)
+    if (config.mode !== 2) {
+      const hintBtn = document.createElement('button');
+      hintBtn.className = 'hint-btn';
+      hintBtn.textContent = 'Hint';
+      hintBtn.title = 'Reveal a letter';
+      hintBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.onHint();
+        this.input.focus();
+      });
+      this.inputRow.appendChild(hintBtn);
+    }
 
     // Skip button (not for Mode 2)
     if (config.mode !== 2) {
@@ -155,6 +187,20 @@ export class GameHUD {
         this.input.focus();
       });
       this.inputRow.appendChild(skipBtn);
+    }
+
+    // Find button (mode 2 only — pan to an unguessed country)
+    if (config.mode === 2) {
+      const findBtn = document.createElement('button');
+      findBtn.className = 'skip-btn';
+      findBtn.textContent = 'Find';
+      findBtn.title = 'Pan to an unguessed country';
+      findBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.onFind?.();
+        this.input.focus();
+      });
+      this.inputRow.appendChild(findBtn);
     }
 
     // Zoom controls (bottom-right)
@@ -184,7 +230,7 @@ export class GameHUD {
         if (val) this.onGuess(val);
       } else if (e.key === 'Tab') {
         e.preventDefault();
-        this.onHint();
+        if (this.config.mode !== 2) this.onHint();
       } else if (e.key === 'Escape') {
         e.preventDefault();
         if (config.mode !== 2) this.onSkip();
@@ -222,7 +268,7 @@ export class GameHUD {
 
   private getPlaceholder(): string {
     switch (this.config.mode) {
-      case 1: return 'Name this country or select another...';
+      case 1: return 'Select a country on the map';
       case 2: return 'Type any country name...';
       case 3: return 'Name this country...';
       case 5: return 'Type the capital city...';
@@ -232,6 +278,13 @@ export class GameHUD {
 
   updateScore(correct: number, total: number): void {
     this.scoreEl.textContent = `${correct} / ${total}`;
+  }
+
+  updateScoreDetailed(correct: number, incorrect: number, remaining: number): void {
+    this.scoreEl.innerHTML =
+      `<span style="color:var(--color-correct)">${correct} correct</span>` +
+      ` <span style="color:var(--color-missed)">${incorrect} incorrect</span>` +
+      ` <span>${remaining} remaining</span>`;
   }
 
   updateTimer(seconds: number, isCountdown: boolean): void {
@@ -250,6 +303,10 @@ export class GameHUD {
   updatePrompt(prompt: PromptData): void {
     this.promptArea.innerHTML = '';
     this.choicesRow.style.display = 'none';
+    this.choiceSkipBtn.style.display = 'none';
+    // Hide the choices wrapper too
+    const choicesWrapper = this.choicesRow.parentElement;
+    if (choicesWrapper) choicesWrapper.style.display = 'none';
     this.inputRow.style.display = 'flex';
     this.hideNearMiss();
     // Don't clear hint prefix here — it persists per-country (restored via restoreHint)
@@ -263,18 +320,25 @@ export class GameHUD {
       this.promptArea.appendChild(img);
     }
 
-    // Text display
-    if (prompt.text) {
+    // Text display (skip for modes 1 & 2 where it's redundant with placeholder)
+    if (prompt.text && this.config.mode !== 1 && this.config.mode !== 2) {
       const textEl = document.createElement('div');
       textEl.className = 'prompt-text';
       textEl.textContent = prompt.text;
       this.promptArea.appendChild(textEl);
     }
 
+    // Update placeholder for mode 1 once a country is selected
+    if (this.config.mode === 1 && prompt.type === 'click') {
+      this.input.placeholder = 'Type the country name...';
+    }
+
     // Multiple choice
     if (prompt.choices && this.config.variant === 'multiple-choice') {
       this.inputRow.style.display = 'none';
       this.choicesRow.style.display = 'flex';
+      this.choiceSkipBtn.style.display = 'inline-block';
+      if (choicesWrapper) choicesWrapper.style.display = 'flex';
       this.choicesRow.innerHTML = '';
       prompt.choices.forEach((choice, idx) => {
         const btn = document.createElement('button');
@@ -289,6 +353,8 @@ export class GameHUD {
     if (prompt.choiceItems && this.config.variant === 'match-flag') {
       this.inputRow.style.display = 'none';
       this.choicesRow.style.display = 'flex';
+      this.choiceSkipBtn.style.display = 'inline-block';
+      if (choicesWrapper) choicesWrapper.style.display = 'flex';
       this.choicesRow.innerHTML = '';
 
       if (this.config.mode === 3) {
@@ -357,7 +423,6 @@ export class GameHUD {
       <span class="hint-link">Use hint</span>
     `;
     this.nearMissBar.classList.add('visible');
-    this.input.classList.add('near-miss');
     // Whole bar is clickable
     this.nearMissBar.style.cursor = 'pointer';
     this.nearMissBar.addEventListener('click', this.handleNearMissClick);
@@ -372,7 +437,6 @@ export class GameHUD {
     this.nearMissBar.classList.remove('visible');
     this.nearMissBar.style.cursor = '';
     this.nearMissBar.removeEventListener('click', this.handleNearMissClick);
-    this.input.classList.remove('near-miss');
   }
 
   shakeInput(): void {
@@ -431,6 +495,18 @@ export class GameHUD {
   focusInput(): void {
     this.input.focus();
   }
+
+  setInputLocked(locked: boolean): void {
+    this.input.disabled = locked;
+    if (locked) {
+      this.input.placeholder = 'Click a country on the map...';
+    } else {
+      this.input.placeholder = this.getPlaceholder();
+      this.input.focus();
+    }
+  }
+
+
 
   dispose(): void {
     this.container.remove();

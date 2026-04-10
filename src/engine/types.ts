@@ -3,7 +3,7 @@ import type { Country } from '../data/countries';
 export type GameMode = 1 | 2 | 3 | 5;
 export type QuizVariant = 'free' | 'multiple-choice' | 'match-flag';
 export type TimeLimit = 15 | 30 | null;
-export type QuestionCount = 10 | 25 | 50 | 100 | null; // null = all
+export type QuestionCount = 10 | 20 | 50 | 100 | null; // null = all
 
 export interface GameConfig {
   mode: GameMode;
@@ -29,6 +29,7 @@ export interface GameResult {
   hintsUsed: number;
   guessedCountries: Country[];
   missedCountries: Country[];
+  modeName?: string;
 }
 
 export interface PromptData {

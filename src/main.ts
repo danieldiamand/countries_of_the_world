@@ -7,7 +7,9 @@ import {
   FlagQuizMode,
   CapitalQuizMode,
 } from './modes/adapters';
-import { WorldMap } from './map/WorldMap';
+import { WorldMap, type CountryState } from './map/WorldMap';
+import { countries as allCountries } from './data/countries';
+import { getEnabledTerritories, buildTerritoryParentMap, buildParentToTerritoryMap } from './data/territories';
 import { StartScreen } from './ui/StartScreen';
 import { GameHUD } from './ui/GameHUD';
 import { ResultScreen } from './ui/ResultScreen';
@@ -21,6 +23,9 @@ class App {
   private gameHUD: GameHUD | null = null;
   private resultScreen: ResultScreen | null = null;
   private lastConfig: GameConfig | null = null;
+  private lastEnabledTerritoryIds: Set<string> = new Set();
+  private parentToTerritoryMap: Map<string, string[]> = new Map();
+  private highlightedTerritoryRawIds: Set<string> = new Set();
 
   constructor() {
     this.app = document.getElementById('app')!;
@@ -41,15 +46,48 @@ class App {
     this.cleanupGame();
     this.worldMap.resetStates();
     this.worldMap.setActiveCountryIds(null);
+    this.worldMap.setGravityCenter(null);
     this.worldMap.resetZoom();
 
     this.startScreen = new StartScreen(this.app, (config) => {
-      this.startGame(config);
+      const enabledIds = this.startScreen!.getEnabledTerritoryIds();
+      this.startGame(config, enabledIds);
+    }, (mode) => {
+      if (mode === 3) this.preloadAllFlags();
+    }, (continent) => {
+      this.handleContinentPreview(continent);
     });
   }
 
-  private startGame(config: GameConfig): void {
+  /** Highlight continent on map from start screen selection */
+  private handleContinentPreview(continent: string): void {
+    const CONTINENT_CENTERS: Record<string, [number, number]> = {
+      'Africa': [20, 0],
+      'Asia': [90, 30],
+      'Europe': [15, 52],
+      'North America': [-95, 40],
+      'South America': [-60, -15],
+      'Oceania': [140, -25],
+    };
+
+    if (continent === 'World') {
+      this.worldMap.setActiveCountryIds(null);
+      this.worldMap.setGravityCenter([10, 20]);
+      this.worldMap.resetZoom(600);
+    } else {
+      const ids = new Set(
+        allCountries.filter(c => c.continent === continent).map(c => c.id)
+      );
+      this.worldMap.setActiveCountryIds(ids);
+      this.worldMap.setGravityCenter(CONTINENT_CENTERS[continent] || null);
+      this.worldMap.zoomToContinent(continent);
+    }
+  }
+
+  private startGame(config: GameConfig, enabledTerritoryIds?: Set<string>): void {
     this.lastConfig = config;
+    const enabledIds = enabledTerritoryIds || new Set<string>();
+    this.lastEnabledTerritoryIds = enabledIds;
 
     // Hide start screen
     this.startScreen?.dispose();
@@ -63,6 +101,15 @@ class App {
     // Create mode adapter
     const adapter = this.createAdapter(config);
 
+    // Set up territory→parent mapping for disabled territories
+    const territoryParentMap = buildTerritoryParentMap(enabledIds);
+    this.worldMap.setTerritoryParentMap(territoryParentMap);
+    this.parentToTerritoryMap = buildParentToTerritoryMap(enabledIds);
+
+    // Set enabled territories on the engine
+    const extras = getEnabledTerritories(enabledIds);
+    this.engine.setExtraCountries(extras);
+
     // Pass centroids to engine for geographic nearest-neighbor
     this.engine.setCentroids(this.worldMap.getAllCentroids());
 
@@ -70,24 +117,55 @@ class App {
     const enableMapClick = adapter.requiresMapClick ||
       (config.mode === 5 && config.variant === 'free');
     if (enableMapClick) {
-      this.worldMap.setClickHandler((countryId) => {
+      this.worldMap.setClickHandler((countryId, territoryRawId, isOverseas) => {
         if (this.engine.isRunning) {
           const selected = this.engine.selectCountry(countryId);
           if (selected) {
-            this.worldMap.setCountryState(countryId, 'selected');
+            this.worldMap.setCountryState(countryId, 'highlighted');
+            // Also highlight the territory feature if clicked on one
+            if (territoryRawId) {
+              this.worldMap.setCountryState(territoryRawId, 'highlighted');
+              this.highlightedTerritoryRawIds.add(territoryRawId);
+            }
+            // Highlight disabled child territories (e.g. Greenland for Denmark)
+            const childTerritories = this.parentToTerritoryMap.get(countryId);
+            if (childTerritories) {
+              for (const tid of childTerritories) {
+                this.worldMap.setCountryState(tid, 'highlighted');
+                this.highlightedTerritoryRawIds.add(tid);
+              }
+            }
+            // Unlock input now that a country is selected (mode 1)
+            if (config.mode === 1) {
+              this.gameHUD?.setInputLocked(false);
+            }
             // Restore hint state if this country had hints
             const hint = this.engine.getHintForCountry(countryId);
             this.gameHUD?.restoreHint(hint);
-            // Fly to the clicked country
-            this.worldMap.flyTo(countryId, 600);
+            // Fly to the clicked spot (territory or country)
+            if (territoryRawId && territoryRawId !== countryId) {
+              // Clicked a separate territory feature → show both territory and parent
+              this.worldMap.flyToShowBoth(territoryRawId, countryId, 600);
+            } else if (isOverseas) {
+              // Clicked overseas part of a multipolygon country (e.g. French Guiana)
+              this.worldMap.flyToShowBoth(countryId, countryId, 600);
+            } else {
+              this.worldMap.flyTo(countryId, 600, true, config.mode === 1 ? {
+                preferPanOnly: true,
+              } : undefined);
+            }
           }
         }
       });
     } else {
-      this.worldMap.setClickHandler((countryId) => {
+      this.worldMap.setClickHandler((countryId, territoryRawId, isOverseas) => {
         // Click-to-fly: clicking a country flies to it even in non-click modes
         if (this.engine.isRunning && (config.mode === 2)) {
-          this.worldMap.flyTo(countryId, 600);
+          if (isOverseas) {
+            this.worldMap.flyToShowBoth(countryId, countryId, 600);
+          } else {
+            this.worldMap.flyTo(countryId, 600, true);
+          }
         }
       });
     }
@@ -106,6 +184,7 @@ class App {
       onChoice: (index) => this.handleChoice(index),
       onRevealNearMiss: () => this.handleRevealNearMiss(),
       onZoom: (factor) => this.worldMap.zoomBy(factor),
+      onFind: () => this.handleFind(),
     });
 
     this.gameHUD.setModeLabel(adapter.modeName);
@@ -113,22 +192,59 @@ class App {
     // Clear previous engine listeners and set up new ones
     this.engine.removeAllListeners();
 
+    // Track question index for score display (flag/capital modes)
+    let questionIndex = 0;
+
     this.engine.on('correct', (event) => {
       const country = event.country!;
-      // Don't color countries on the map for Flag Quiz (shows answers)
-      if (config.mode !== 3) {
+      // Flag and Capital modes (3, 5): flash green briefly then revert
+      // Point-and-type (1) and Free-type (2): stay green permanently
+      if (config.mode === 3 || (config.mode === 5 && config.variant !== 'free')) {
         this.worldMap.setCountryState(country.id, 'correct');
+        const childTerritories = this.parentToTerritoryMap.get(country.id);
+        if (childTerritories) {
+          for (const tid of childTerritories) {
+            this.worldMap.setCountryState(tid, 'correct');
+          }
+        }
+        // Hold green for 1.5s, then fade out over 1s
+        setTimeout(() => {
+          this.worldMap.fadeOutCountry(country.id, 1000);
+          if (childTerritories) {
+            for (const tid of childTerritories) {
+              this.worldMap.fadeOutCountry(tid, 1000);
+            }
+          }
+        }, 1500);
+      } else {
+        this.worldMap.setCountryState(country.id, 'correct');
+        const childTerritories = this.parentToTerritoryMap.get(country.id);
+        if (childTerritories) {
+          for (const tid of childTerritories) {
+            this.worldMap.setCountryState(tid, 'correct');
+          }
+        }
       }
       this.gameHUD?.showCorrectToast(country);
       this.gameHUD?.clearInput();
-      this.gameHUD?.updateScore(
-        this.engine.correctCount,
-        this.engine.totalCountries
-      );
 
-      // Fly to country for Free Type mode (so user sees which one they got)
+      if (config.mode === 3 || config.mode === 5) {
+        questionIndex++;
+        this.gameHUD?.updateScoreDetailed(
+          this.engine.correctCount,
+          questionIndex - this.engine.correctCount,
+          this.engine.totalCountries - questionIndex
+        );
+      } else {
+        this.gameHUD?.updateScore(
+          this.engine.correctCount,
+          this.engine.totalCountries
+        );
+      }
+
+      // Free Type mode: gently pan toward the country's continent (high-level view)
       if (config.mode === 2) {
-        this.worldMap.flyTo(country.id, 600);
+        this.worldMap.panToContinent(country.continent, 900);
       }
     });
 
@@ -140,6 +256,17 @@ class App {
 
     this.engine.on('incorrect', () => {
       this.gameHUD?.shakeInput();
+    });
+
+    this.engine.on('skip', () => {
+      if (config.mode === 3 || config.mode === 5) {
+        questionIndex++;
+        this.gameHUD?.updateScoreDetailed(
+          this.engine.correctCount,
+          questionIndex - this.engine.correctCount,
+          this.engine.totalCountries - questionIndex
+        );
+      }
     });
 
     this.engine.on('hint', (event) => {
@@ -164,18 +291,37 @@ class App {
               this.worldMap.setCountryState(c.id, 'default');
             }
           }
+          // Also clear any territory raw ID highlights
+          for (const tid of this.highlightedTerritoryRawIds) {
+            const currentState = this.worldMap.getCountryState(tid);
+            if (currentState === 'selected' || currentState === 'highlighted') {
+              this.worldMap.setCountryState(tid, 'default');
+            }
+          }
+          this.highlightedTerritoryRawIds.clear();
 
           // Mode 1 (click & type): highlight auto-advanced country + fly to it
           if (config.mode === 1) {
             this.worldMap.setCountryState(country.id, 'highlighted');
-            this.worldMap.flyTo(country.id, 600);
+            // Also highlight disabled child territories (e.g. Greenland for Denmark)
+            const childTerritories = this.parentToTerritoryMap.get(country.id);
+            if (childTerritories) {
+              for (const tid of childTerritories) {
+                this.worldMap.setCountryState(tid, 'highlighted');
+                this.highlightedTerritoryRawIds.add(tid);
+              }
+            }
+            this.worldMap.flyTo(country.id, 600, false, {
+              preferPanOnly: true,
+            });
+            this.gameHUD?.setInputLocked(false);
             // Restore hint for this country if it had one
             const hint = this.engine.getHintForCountry(country.id);
             this.gameHUD?.restoreHint(hint);
             return;
           }
 
-          this.worldMap.setCountryState(country.id, 'selected');
+          this.worldMap.setCountryState(country.id, 'highlighted');
 
           // For capital quiz free mode, fly to the country
           if (config.mode === 5) {
@@ -206,16 +352,36 @@ class App {
 
     // Start the engine
     this.engine.start(config, adapter);
-    this.gameHUD.updateScore(0, this.engine.totalCountries);
+    if (config.mode === 3 || config.mode === 5) {
+      this.gameHUD.updateScoreDetailed(0, 0, this.engine.totalCountries);
+    } else {
+      this.gameHUD.updateScore(0, this.engine.totalCountries);
+    }
+
+    // Mode 1: lock input until a country is selected
+    if (config.mode === 1) {
+      this.gameHUD.setInputLocked(true);
+    }
 
     // Zoom to continent if specific one selected
     if (config.continent !== 'World') {
       this.worldMap.zoomToContinent(config.continent);
-      // Grey out non-active countries
-      const activeIds = new Set(this.engine.remainingCountries.map(c => c.id));
-      this.worldMap.setActiveCountryIds(activeIds);
+      // Grey out non-active countries — highlight ALL countries in the continent,
+      // not just the ones in the quiz pool (so the whole continent is colored)
+      const allBase = [...allCountries, ...extras];
+      const allContinentIds = new Set(
+        allBase.filter(c => c.continent === config.continent).map(c => c.id)
+      );
+      this.worldMap.setActiveCountryIds(allContinentIds);
+      // Set gravity center for this continent
+      const CONTINENT_CENTERS: Record<string, [number, number]> = {
+        'Africa': [20, 0], 'Asia': [90, 30], 'Europe': [15, 52],
+        'North America': [-95, 40], 'South America': [-60, -15], 'Oceania': [140, -25],
+      };
+      this.worldMap.setGravityCenter(CONTINENT_CENTERS[config.continent] || null);
     } else {
       this.worldMap.setActiveCountryIds(null);
+      this.worldMap.setGravityCenter([10, 20]);
     }
 
     // Initial timer display
@@ -246,35 +412,45 @@ class App {
     this.engine.revealNearMiss();
   }
 
+  private handleFind(): void {
+    const country = this.engine.getRandomUnguessedCountry();
+    if (country) {
+      // Find button: fly to the country (uses 4-level zoom system)
+      this.worldMap.flyTo(country.id, 600, true);
+    }
+  }
+
   private handleChoice(index: number): void {
     const prompt = this.engine.getPrompt();
-    const result = this.engine.submitChoice(index);
+    if (!prompt || !this.gameHUD || !this.lastConfig) return;
 
-    if (prompt && this.gameHUD) {
-      if (prompt.choices) {
-        const country = prompt.country;
-        if (country) {
-          const correctAnswer =
-            this.lastConfig?.mode === 5 ? country.capital : country.name;
-          const correctIdx = prompt.choices.findIndex(
-            (c) => c === correctAnswer
-          );
-          this.gameHUD.showChoiceResult(correctIdx, index);
-        }
-      } else if (prompt.choiceItems) {
-        const correctIdx = prompt.choiceItems.findIndex(
-          (c) => c.id === prompt.country?.id
-        );
-        this.gameHUD.showChoiceResult(correctIdx, index);
-      }
+    const country = prompt.country;
+    if (!country) return;
 
-      // Auto-advance after brief delay on wrong choice
-      if (result.status !== 'correct') {
-        setTimeout(() => {
-          this.engine.skip();
-        }, 1200);
-      }
+    // Determine correct answer index
+    let correctIdx = -1;
+    if (this.lastConfig.variant === 'multiple-choice' && prompt.choices) {
+      const correctAnswer =
+        this.lastConfig.mode === 5 ? country.capital : country.name;
+      correctIdx = prompt.choices.findIndex((c) => c === correctAnswer);
+    } else if (this.lastConfig.variant === 'match-flag' && prompt.choiceItems) {
+      correctIdx = prompt.choiceItems.findIndex((c) => c.id === country.id);
     }
+
+    const isCorrect = index === correctIdx;
+
+    // Show visual result immediately
+    this.gameHUD.showChoiceResult(correctIdx, index);
+
+    // Delay engine processing so user sees the visual feedback first
+    const delay = isCorrect ? 800 : 1200;
+    setTimeout(() => {
+      if (!this.engine.isRunning) return;
+      const result = this.engine.submitChoice(index);
+      if (result.status !== 'correct') {
+        this.engine.skip();
+      }
+    }, delay);
   }
 
   private showResults(result: GameResult): void {
@@ -284,13 +460,11 @@ class App {
     // Clear grey-out
     this.worldMap.setActiveCountryIds(null);
 
-    // Color map: correct = green, missed = faded red
-    result.guessedCountries.forEach((c) => {
-      this.worldMap.setCountryState(c.id, 'correct');
-    });
-    result.missedCountries.forEach((c) => {
-      this.worldMap.setCountryState(c.id, 'missed');
-    });
+    // Color map: correct = green, missed = faded red (batch to avoid N renders)
+    const states = new Map<string, CountryState>();
+    result.guessedCountries.forEach((c) => states.set(c.id, 'correct'));
+    result.missedCountries.forEach((c) => states.set(c.id, 'missed'));
+    this.worldMap.batchSetCountryStates(states);
     this.worldMap.resetZoom(500);
 
     this.resultScreen = new ResultScreen(this.app, result, {
@@ -298,7 +472,7 @@ class App {
         this.resultScreen?.dispose();
         this.resultScreen = null;
         if (this.lastConfig) {
-          this.startGame(this.lastConfig);
+          this.startGame(this.lastConfig, this.lastEnabledTerritoryIds);
         }
       },
       onChangeMode: () => {
@@ -337,6 +511,16 @@ class App {
   private preloadFlags(): void {
     const pool = this.engine.remainingCountries;
     for (const country of pool) {
+      const img = new Image();
+      img.src = `/flags/${country.alpha2}.svg`;
+    }
+  }
+
+  /**
+   * Preload all flag SVGs (called when user selects flag mode, before game starts).
+   */
+  private preloadAllFlags(): void {
+    for (const country of allCountries) {
       const img = new Image();
       img.src = `/flags/${country.alpha2}.svg`;
     }
