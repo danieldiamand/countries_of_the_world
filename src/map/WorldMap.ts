@@ -44,6 +44,10 @@ export class WorldMap {
   private height: number = 0;
   private activeTransition: d3.Transition<HTMLCanvasElement, unknown, null, undefined> | null = null;
 
+  // Vertical offset ratio for fly-to centering (0 = center of viewport, negative = shift up)
+  // Used on mobile to center countries in the visible top half when keyboard is open
+  private flyToCenterYRatio: number = 0;
+
   // Cached centroids in projected [x, y] coords
   private centroids: Map<string, [number, number]> = new Map();
 
@@ -105,7 +109,7 @@ export class WorldMap {
 
     this.zoom = d3
       .zoom<HTMLCanvasElement, unknown>()
-      .scaleExtent([1, 20])
+      .scaleExtent([1, 25])
       .on('zoom', (event: d3.D3ZoomEvent<HTMLCanvasElement, unknown>) => {
         const t = event.transform;
         this.currentTransform = t;
@@ -333,6 +337,15 @@ export class WorldMap {
     this.onCountryHover = handler;
   }
 
+  /**
+   * Set vertical offset for fly-to centering.
+   * Negative values shift the center point upward (e.g. -0.25 = center in top half).
+   * Used on mobile to account for the keyboard covering the bottom half.
+   */
+  setFlyToCenterYRatio(ratio: number): void {
+    this.flyToCenterYRatio = ratio;
+  }
+
   setCountryState(countryId: string, state: CountryState): void {
     // If setting to a concrete state, cancel any active fade for this country
     this.fadeOutEntries.delete(countryId);
@@ -471,14 +484,20 @@ export class WorldMap {
     const MASSIVE_IDS = new Set(['643', '124']);            // Russia, Canada
     const BIG_IDS = new Set(['840', '156', '076', '036']); // USA, China, Brazil, Australia
     const VERY_BIG_IDS = new Set(['356', '032', '398', '010']); // India, Argentina, Kazakhstan, Antarctica
-    const TINY_IDS = new Set([                              // Microstates & very small countries
+    const SUPER_TINY_IDS = new Set([                        // Microstates & island specks — invisible even at tiny zoom
       '336', '674', '492', '438',                           // Vatican, San Marino, Monaco, Liechtenstein
-      '442', '470', '020', '048', '702',                    // Luxembourg, Malta, Andorra, Bahrain, Singapore
-      '174', '678', '690', '132', '480', '270',             // Comoros, São Tomé, Seychelles, Cabo Verde, Mauritius, Gambia
-      '462', '096', '626',                                  // Maldives, Brunei, Timor-Leste
-      '028', '052', '212', '308', '659', '662', '670', '780', // Antigua, Barbados, Dominica, Grenada, St Kitts, St Lucia, St Vincent, Trinidad
-      '242', '296', '584', '583', '520', '585',             // Fiji, Kiribati, Marshall Islands, Micronesia, Nauru, Palau
-      '882', '090', '776', '798', '548',                    // Samoa, Solomon Islands, Tonga, Tuvalu, Vanuatu
+      '020', '470', '048', '702',                           // Andorra, Malta, Bahrain, Singapore
+      '462',                                                // Maldives
+      '028', '052', '308', '659', '662', '670',             // Antigua, Barbados, Grenada, St Kitts, St Lucia, St Vincent
+      '520', '585', '798', '776',                           // Nauru, Palau, Tuvalu, Tonga
+      '174', '678', '690',                                  // Comoros, São Tomé, Seychelles
+    ]);
+    const TINY_IDS = new Set([                              // Small countries — visible at high zoom
+      '442', '132', '480', '270',                           // Luxembourg, Cabo Verde, Mauritius, Gambia
+      '096', '626',                                         // Brunei, Timor-Leste
+      '212', '780',                                         // Dominica, Trinidad
+      '242', '296', '584', '583',                           // Fiji, Kiribati, Marshall Islands, Micronesia
+      '882', '090', '548',                                  // Samoa, Solomon Islands, Vanuatu
     ]);
 
     // Determine fixed target scale based on tier.
@@ -487,6 +506,7 @@ export class WorldMap {
     if (MASSIVE_IDS.has(countryId)) fixedScale = 2.2;
     else if (BIG_IDS.has(countryId)) fixedScale = 3.0;
     else if (VERY_BIG_IDS.has(countryId)) fixedScale = 3.8;
+    else if (SUPER_TINY_IDS.has(countryId)) fixedScale = 22;
     else if (TINY_IDS.has(countryId)) fixedScale = 16;
     else fixedScale = 5.0; // STANDARD — the one zoom for nearly all countries
 
@@ -502,7 +522,7 @@ export class WorldMap {
       screenY > marginY &&
       screenY < this.height - marginY;
 
-    const maxScale = options?.maxScale ?? 20;
+    const maxScale = options?.maxScale ?? 25;
     const durationMult = options?.durationMultiplier ?? 1;
     const preferPanOnly = options?.preferPanOnly ?? false;
 
@@ -540,8 +560,11 @@ export class WorldMap {
     const actualDuration = duration * durationMult;
 
     const t0 = this.currentTransform;
+    // Apply vertical offset for mobile keyboard centering
+    const centerY = this.height / 2 + this.height * this.flyToCenterYRatio;
+
     const t1 = d3.zoomIdentity
-      .translate(this.width / 2, this.height / 2)
+      .translate(this.width / 2, centerY)
       .scale(targetScale)
       .translate(-cx, -cy);
 
@@ -601,7 +624,7 @@ export class WorldMap {
     const cy = (minY + maxY) / 2;
 
     // Scale to fit both features with breathing room (0.85 factor)
-    const targetScale = Math.max(1, Math.min(20,
+    const targetScale = Math.max(1, Math.min(25,
       0.85 * Math.min(this.width / Math.max(dx, 1), this.height / Math.max(dy, 1))
     ));
 
@@ -636,6 +659,27 @@ export class WorldMap {
       .transition()
       .duration(duration)
       .call(this.zoom.transform as any, d3.zoomIdentity);
+  }
+
+  /**
+   * Set a comfortable initial zoom for mobile (World mode).
+   * Zooms in ~1.8x centered slightly above middle to fill the small screen.
+   */
+  setInitialMobileZoom(): void {
+    const center: [number, number] = [10, 20]; // roughly world center
+    const projected = this.projection(center);
+    if (!projected) return;
+    d3.select(this.canvas).interrupt();
+    const scale = 1.8;
+    const transform = d3.zoomIdentity
+      .translate(this.width / 2, this.height / 2)
+      .scale(scale)
+      .translate(-projected[0], -projected[1]);
+    d3.select(this.canvas)
+      .transition()
+      .duration(600)
+      .ease(d3.easeCubicInOut)
+      .call(this.zoom.transform as any, transform);
   }
 
   /**
@@ -734,7 +778,7 @@ export class WorldMap {
   zoomBy(factor: number): void {
     d3.select(this.canvas).interrupt();
     const currentK = this.currentTransform.k;
-    const newK = Math.max(1, Math.min(20, currentK * factor));
+    const newK = Math.max(1, Math.min(25, currentK * factor));
 
     // When zooming out to near minimum, smoothly center the view
     if (factor < 1 && newK <= 1.18) {

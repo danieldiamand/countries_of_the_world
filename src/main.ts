@@ -47,6 +47,7 @@ class App {
     this.worldMap.resetStates();
     this.worldMap.setActiveCountryIds(null);
     this.worldMap.setGravityCenter(null);
+    this.worldMap.setFlyToCenterYRatio(0);
     this.worldMap.resetZoom();
 
     this.startScreen = new StartScreen(this.app, (config) => {
@@ -97,6 +98,12 @@ class App {
     this.cleanupGame();
     this.worldMap.resetStates();
     this.worldMap.resetZoom(300);
+
+    // Mobile: shift fly-to centering upward so countries appear in the visible
+    // top half of the screen (bottom half is covered by the keyboard).
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+      (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
+    this.worldMap.setFlyToCenterYRatio(isMobile ? -0.2 : 0);
 
     // Create mode adapter
     const adapter = this.createAdapter(config);
@@ -359,6 +366,10 @@ class App {
     } else {
       this.worldMap.setActiveCountryIds(null);
       this.worldMap.setGravityCenter([10, 20]);
+      // On mobile, start at a higher zoom so the map fills the small screen better
+      if (isMobile) {
+        this.worldMap.setInitialMobileZoom();
+      }
     }
 
     // Initial timer display

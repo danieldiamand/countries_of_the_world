@@ -154,12 +154,18 @@ export class GameHUD {
     this.input.autocomplete = 'off';
     this.input.autocapitalize = 'off';
     this.input.spellcheck = false;
+    // Use 'search' inputmode for a compact keyboard without suggestions bar
+    this.input.inputMode = 'search';
     // Prevent mobile keyboard suggestions/autocorrect
     this.input.setAttribute('autocorrect', 'off');
     this.input.setAttribute('data-form-type', 'other');
     this.input.setAttribute('data-lpignore', 'true');
     this.input.setAttribute('enterkeyhint', 'go');
     inputWrapper.appendChild(this.input);
+
+    // Prevent keyboard from closing when tapping the map canvas on mobile.
+    // We intercept touchstart on the map canvas and re-focus the input.
+    this.setupMobileKeyboardPersistence();
 
     // Hint button (not for Mode 2 — no target country for hints)
     if (config.mode !== 2) {
@@ -494,6 +500,30 @@ export class GameHUD {
 
   focusInput(): void {
     this.input.focus();
+  }
+
+  /**
+   * On mobile, prevent the keyboard from closing when the user taps the map canvas.
+   * We listen for touchend on the canvas and immediately re-focus the input.
+   */
+  private setupMobileKeyboardPersistence(): void {
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+      (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
+    if (!isMobile) return;
+
+    // Find the map canvas
+    const canvas = document.querySelector('.world-map-canvas') as HTMLCanvasElement | null;
+    if (!canvas) return;
+
+    // After a touch on the canvas, re-focus the input to keep the keyboard open.
+    // Use a short delay to let the map click handler fire first.
+    canvas.addEventListener('touchend', () => {
+      if (this.input && !this.input.disabled && this.inputRow.style.display !== 'none') {
+        setTimeout(() => {
+          this.input.focus();
+        }, 50);
+      }
+    });
   }
 
   setInputLocked(locked: boolean): void {
