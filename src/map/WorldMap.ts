@@ -26,12 +26,34 @@ export const MAP_COLORS = {
   text: '#4A4340',
 };
 
-// Microstates too small to have visible polygons on a 50m resolution map.
-// We draw small dot markers at their centroids so they're findable.
+// Countries too small to have clearly visible polygons on a 50m resolution map.
+// We draw dot markers at their centroids so they're findable.
+// Threshold: roughly countries under ~1000 km² (about twice Andorra's size).
 const MARKER_IDS = new Set([
   '336',  // Vatican City (~0.44 km²)
   '492',  // Monaco (~2 km²)
+  '520',  // Nauru (~21 km²)
+  '798',  // Tuvalu (~26 km²)
   '674',  // San Marino (~61 km²)
+  '438',  // Liechtenstein (~160 km²)
+  '584',  // Marshall Islands (~181 km²)
+  '659',  // Saint Kitts and Nevis (~261 km²)
+  '462',  // Maldives (~300 km²)
+  '470',  // Malta (~316 km²)
+  '308',  // Grenada (~344 km²)
+  '670',  // Saint Vincent and the Grenadines (~390 km²)
+  '052',  // Barbados (~430 km²)
+  '028',  // Antigua and Barbuda (~440 km²)
+  '585',  // Palau (~459 km²)
+  '690',  // Seychelles (~459 km²)
+  '662',  // Saint Lucia (~617 km²)
+  '583',  // Micronesia (~702 km²)
+  '702',  // Singapore (~733 km²)
+  '776',  // Tonga (~748 km²)
+  '212',  // Dominica (~751 km²)
+  '048',  // Bahrain (~780 km²)
+  '296',  // Kiribati (~811 km²)
+  '678',  // São Tomé and Príncipe (~964 km²)
 ]);
 
 export class WorldMap {
@@ -61,6 +83,10 @@ export class WorldMap {
   // Gravity center: projected [x,y] that the view drifts towards at max zoom-out
   private gravityCenter: [number, number] | null = null;
 
+  // Last country flyTo targeted — used to re-center when keyboard opens/closes
+  private lastFlyToId: string | null = null;
+  private viewportCompensationTimer: number = 0;
+
   constructor(container: HTMLElement) {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'world-map-canvas';
@@ -71,6 +97,7 @@ export class WorldMap {
     this.setupProjection();
     this.setupZoom();
     this.setupInteractions();
+    this.setupViewportCompensation();
 
     const ro = new ResizeObserver(() => {
       this.setupSize();
@@ -206,11 +233,11 @@ export class WorldMap {
     const coords = this.projection.invert?.([tx, ty]);
     if (!coords) return null;
 
-    // Check marker countries FIRST (Vatican, Monaco, San Marino) — their dots
-    // sit on top of neighboring country polygons, so they must take priority.
+    // Check marker countries FIRST — their dots sit on top of
+    // neighboring country polygons, so they must take priority.
     const k = this.currentTransform.k;
-    if (k >= 5) {
-      const dotScreenRadius = 4 * (1 + Math.max(0, k - 5) * 0.08);
+    if (k >= 3) {
+      const dotScreenRadius = k < 5 ? 5 : 4 * (1 + Math.max(0, k - 5) * 0.08);
       const hitRadiusPx = dotScreenRadius + 14;
       let closest: CountryFeature | null = null;
       let closestDist = Infinity;
@@ -390,6 +417,8 @@ export class WorldMap {
     duration: number = 750,
     forceCenter: boolean = false,
   ): void {
+    this.lastFlyToId = countryId;
+
     const feature = this.features.find((f) => f.id?.toString() === countryId);
     if (!feature || !this.path) return;
 
@@ -579,11 +608,46 @@ export class WorldMap {
   }
 
   resetZoom(duration: number = 500): void {
+    this.lastFlyToId = null;
     d3.select(this.canvas).interrupt();
     d3.select(this.canvas)
       .transition()
       .duration(duration)
       .call(this.zoom.transform as any, d3.zoomIdentity);
+  }
+
+  /**
+   * On mobile, when the virtual keyboard opens or closes the visual viewport
+   * height changes significantly. Re-flyTo the last selected country so it
+   * stays centered in the visible area above (or without) the keyboard.
+   */
+  private setupViewportCompensation(): void {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+      (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
+    if (!isMobile) return;
+
+    let prevHeight = vv.height;
+
+    vv.addEventListener('resize', () => {
+      const dh = vv.height - prevHeight;
+      prevHeight = vv.height;
+
+      // Only react to large height changes (keyboard open/close is 150px+)
+      if (Math.abs(dh) < 80) return;
+      if (!this.lastFlyToId) return;
+
+      // Debounce: wait for the viewport to stabilize after the keyboard
+      // animation, then re-center on the selected country.
+      clearTimeout(this.viewportCompensationTimer);
+      const id = this.lastFlyToId;
+      this.viewportCompensationTimer = window.setTimeout(() => {
+        if (this.lastFlyToId === id) {
+          this.flyTo(id, 250, true);
+        }
+      }, 120);
+    });
   }
 
   /**
@@ -791,14 +855,14 @@ export class WorldMap {
       ctx.stroke();
     }
 
-    // Draw dot markers for microstates (Vatican, Monaco, San Marino).
-    // Only show when zoomed in enough (k >= 5) so they don't clutter the zoomed-out view.
+    // Draw dot markers for small countries.
+    // Show from k >= 3 so they're visible when zooming into a region.
     // Dots grow gently with zoom so they're easier to click at high zoom.
-    if (this.currentTransform.k >= 5) {
-      const baseRadius = 4;
-      const growthFactor = 1 + Math.max(0, this.currentTransform.k - 5) * 0.08;
-      const dotScreenRadius = baseRadius * growthFactor;
-      const dotRadius = dotScreenRadius / this.currentTransform.k;
+    if (this.currentTransform.k >= 3) {
+      const kVal = this.currentTransform.k;
+      const baseRadius = kVal < 5 ? 5 : 4 * (1 + Math.max(0, kVal - 5) * 0.08);
+      const dotRadius = baseRadius / kVal;
+      const ringWidth = Math.max(1.5, 2.5 / kVal);
       for (const feature of this.features) {
         const id = feature.id?.toString() || '';
         if (!MARKER_IDS.has(id)) continue;
@@ -811,21 +875,25 @@ export class WorldMap {
         const state = this.countryStates.get(id) || 'default';
         const isHovered = this.hoveredId === id;
 
+        // For active states: white fill + colored ring (clearly visible).
+        // For default: subtle grey dot.
         let fillColor: string;
-        if (state === 'correct') fillColor = MAP_COLORS.correct;
-        else if (state === 'hinted') fillColor = MAP_COLORS.hinted;
-        else if (state === 'selected') fillColor = MAP_COLORS.selected;
-        else if (state === 'highlighted') fillColor = MAP_COLORS.highlighted;
-        else if (state === 'missed') fillColor = MAP_COLORS.missed;
-        else if (isHovered) fillColor = MAP_COLORS.hover;
-        else fillColor = '#C8BFB4'; // border color — subtle default
+        let strokeColor: string;
+        let lw = ringWidth;
+        if (state === 'correct') { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.correct; lw = ringWidth * 1.5; }
+        else if (state === 'hinted') { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.hinted; lw = ringWidth * 1.5; }
+        else if (state === 'selected') { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.selected; lw = ringWidth * 1.5; }
+        else if (state === 'highlighted') { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.highlighted; lw = ringWidth * 1.5; }
+        else if (state === 'missed') { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.missed; lw = ringWidth * 1.5; }
+        else if (isHovered) { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.text; lw = ringWidth * 1.2; }
+        else { fillColor = MAP_COLORS.border; strokeColor = MAP_COLORS.text; }
 
         ctx.beginPath();
         ctx.arc(centroid[0], centroid[1], dotRadius, 0, Math.PI * 2);
         ctx.fillStyle = fillColor;
         ctx.fill();
-        ctx.strokeStyle = MAP_COLORS.border;
-        ctx.lineWidth = 0.5 / this.currentTransform.k;
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = lw;
         ctx.stroke();
       }
     }

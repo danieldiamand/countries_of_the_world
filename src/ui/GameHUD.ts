@@ -17,6 +17,8 @@ export class GameHUD {
   private scoreEl: HTMLElement;
   private timerEl: HTMLElement;
   private modeLabelEl: HTMLElement;
+  private isMobile: boolean;
+  private viewportCleanup: (() => void) | null = null;
 
 
   private onGuess: (input: string) => void;
@@ -56,6 +58,8 @@ export class GameHUD {
     this.onRevealNearMiss = callbacks.onRevealNearMiss || null;
     this.onZoom = callbacks.onZoom || null;
     this.onFind = callbacks.onFind || null;
+    this.isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+      (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
 
     this.container = document.createElement('div');
     this.container.className = 'game-hud';
@@ -86,6 +90,9 @@ export class GameHUD {
     const endBtn = document.createElement('button');
     endBtn.className = 'hud-end-btn';
     endBtn.textContent = 'End';
+    // Prevent button from stealing focus (keeps mobile keyboard open)
+    endBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    endBtn.addEventListener('touchstart', (e) => e.preventDefault());
     endBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -128,6 +135,8 @@ export class GameHUD {
     this.choiceSkipBtn.textContent = 'Skip';
     this.choiceSkipBtn.title = 'Skip this question';
     this.choiceSkipBtn.style.display = 'none';
+    this.choiceSkipBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    this.choiceSkipBtn.addEventListener('touchstart', (e) => e.preventDefault());
     this.choiceSkipBtn.addEventListener('click', (e) => {
       e.preventDefault();
       this.onSkip();
@@ -150,21 +159,21 @@ export class GameHUD {
     inputWrapper.appendChild(this.hintOverlay);
 
     this.input = document.createElement('input');
-    this.input.type = 'text';
+    this.input.type = 'search';
     this.input.className = 'guess-input';
     this.input.placeholder = this.getPlaceholder();
     this.input.autocomplete = 'off';
     this.input.autocapitalize = 'none';
     this.input.spellcheck = false;
     this.input.inputMode = 'text';
-    this.input.name = 'country-guess';
     // Suppress mobile keyboard suggestions/autocorrect/password managers
     this.input.setAttribute('autocorrect', 'off');
-    this.input.setAttribute('autocomplete', 'off');
+    this.input.setAttribute('autocomplete', 'one-time-code');
     this.input.setAttribute('data-form-type', 'other');
     this.input.setAttribute('data-lpignore', 'true');
     this.input.setAttribute('data-1p-ignore', 'true');
     this.input.setAttribute('enterkeyhint', 'go');
+    this.input.setAttribute('aria-autocomplete', 'none');
     inputWrapper.appendChild(this.input);
 
     // Prevent keyboard from closing when tapping the map canvas on mobile.
@@ -177,10 +186,18 @@ export class GameHUD {
       hintBtn.className = 'hint-btn';
       hintBtn.textContent = 'Hint';
       hintBtn.title = 'Reveal a letter';
+      // Prevent keyboard dismiss on mobile
+      hintBtn.addEventListener('mousedown', (e) => e.preventDefault());
+      hintBtn.addEventListener('touchstart', (e) => e.preventDefault());
       hintBtn.addEventListener('click', (e) => {
         e.preventDefault();
         this.onHint();
-        this.input.focus();
+        // Restore cursor to end of input without re-triggering keyboard open/close
+        requestAnimationFrame(() => {
+          this.input.focus();
+          const len = this.input.value.length;
+          this.input.setSelectionRange(len, len);
+        });
       });
       this.inputRow.appendChild(hintBtn);
     }
@@ -191,10 +208,17 @@ export class GameHUD {
       skipBtn.className = 'skip-btn';
       skipBtn.textContent = 'Skip';
       skipBtn.title = 'Skip this country';
+      // Prevent keyboard dismiss on mobile
+      skipBtn.addEventListener('mousedown', (e) => e.preventDefault());
+      skipBtn.addEventListener('touchstart', (e) => e.preventDefault());
       skipBtn.addEventListener('click', (e) => {
         e.preventDefault();
         this.onSkip();
-        this.input.focus();
+        requestAnimationFrame(() => {
+          this.input.focus();
+          const len = this.input.value.length;
+          this.input.setSelectionRange(len, len);
+        });
       });
       this.inputRow.appendChild(skipBtn);
     }
@@ -205,10 +229,17 @@ export class GameHUD {
       findBtn.className = 'skip-btn';
       findBtn.textContent = 'Find';
       findBtn.title = 'Pan to an unguessed country';
+      // Prevent keyboard dismiss on mobile
+      findBtn.addEventListener('mousedown', (e) => e.preventDefault());
+      findBtn.addEventListener('touchstart', (e) => e.preventDefault());
       findBtn.addEventListener('click', (e) => {
         e.preventDefault();
         this.onFind?.();
-        this.input.focus();
+        requestAnimationFrame(() => {
+          this.input.focus();
+          const len = this.input.value.length;
+          this.input.setSelectionRange(len, len);
+        });
       });
       this.inputRow.appendChild(findBtn);
     }
@@ -222,6 +253,8 @@ export class GameHUD {
     zoomIn.className = 'zoom-btn';
     zoomIn.textContent = '+';
     zoomIn.title = 'Zoom in';
+    zoomIn.addEventListener('mousedown', (e) => e.preventDefault());
+    zoomIn.addEventListener('touchstart', (e) => e.preventDefault());
     zoomIn.addEventListener('click', (e) => { e.preventDefault(); this.onZoom?.(1.5); });
     zoomControls.appendChild(zoomIn);
 
@@ -229,6 +262,8 @@ export class GameHUD {
     zoomOut.className = 'zoom-btn';
     zoomOut.textContent = '\u2212';
     zoomOut.title = 'Zoom out';
+    zoomOut.addEventListener('mousedown', (e) => e.preventDefault());
+    zoomOut.addEventListener('touchstart', (e) => e.preventDefault());
     zoomOut.addEventListener('click', (e) => { e.preventDefault(); this.onZoom?.(1 / 1.5); });
     zoomControls.appendChild(zoomOut);
 
@@ -272,6 +307,10 @@ export class GameHUD {
         this.input.focus();
       }
     });
+
+    // On mobile, use visualViewport API to keep the HUD within the visible area
+    // when the keyboard is open. This ensures the top bar and bottom bar stay visible.
+    this.setupVisualViewportTracking();
 
     requestAnimationFrame(() => this.input.focus());
   }
@@ -435,6 +474,9 @@ export class GameHUD {
     this.nearMissBar.classList.add('visible');
     // Whole bar is clickable
     this.nearMissBar.style.cursor = 'pointer';
+    // Prevent keyboard dismiss on mobile
+    this.nearMissBar.addEventListener('mousedown', (e) => e.preventDefault());
+    this.nearMissBar.addEventListener('touchstart', (e) => e.preventDefault());
     this.nearMissBar.addEventListener('click', this.handleNearMissClick);
   }
 
@@ -489,6 +531,13 @@ export class GameHUD {
       <span class="toast-name">${country.name}</span>
     `;
     this.toastContainer.appendChild(toast);
+
+    // On mobile, position toast near top of visual viewport (visible above keyboard)
+    if (this.isMobile && window.visualViewport) {
+      const vv = window.visualViewport;
+      this.toastContainer.style.top = `${vv.offsetTop + 50}px`;
+    }
+
     setTimeout(() => toast.remove(), 2000);
   }
 
@@ -538,6 +587,43 @@ export class GameHUD {
     });
   }
 
+  /**
+   * Use the Visual Viewport API to keep the game HUD properly sized and
+   * positioned when the mobile keyboard is open. The top bar stays pinned
+   * to the top of the visible viewport and the bottom bar stays just above
+   * the keyboard.
+   */
+  private setupVisualViewportTracking(): void {
+    if (!this.isMobile || !window.visualViewport) return;
+
+    const vv = window.visualViewport;
+
+    const update = () => {
+      // Size the HUD container to exactly the visual viewport
+      const height = vv.height;
+      const top = vv.offsetTop;
+      this.container.style.position = 'fixed';
+      this.container.style.top = `${top}px`;
+      this.container.style.left = '0';
+      this.container.style.right = '0';
+      this.container.style.bottom = 'auto';
+      this.container.style.height = `${height}px`;
+
+      // Also reposition toast container to stay near top of visual viewport
+      this.toastContainer.style.position = 'fixed';
+      this.toastContainer.style.top = `${top + 50}px`;
+    };
+
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    update();
+
+    this.viewportCleanup = () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }
+
   setInputLocked(locked: boolean): void {
     this.input.disabled = locked;
     if (locked) {
@@ -551,6 +637,7 @@ export class GameHUD {
 
 
   dispose(): void {
+    this.viewportCleanup?.();
     this.container.remove();
     this.toastContainer.remove();
   }

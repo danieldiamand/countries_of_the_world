@@ -9,7 +9,7 @@ import {
 } from './modes/adapters';
 import { WorldMap, type CountryState } from './map/WorldMap';
 import { countries as allCountries } from './data/countries';
-import { getEnabledTerritories, buildTerritoryParentMap, buildParentToTerritoryMap } from './data/territories';
+import { getEnabledTerritories, buildTerritoryParentMap, buildParentToTerritoryMap, territories } from './data/territories';
 import { StartScreen } from './ui/StartScreen';
 import { GameHUD } from './ui/GameHUD';
 import { ResultScreen } from './ui/ResultScreen';
@@ -79,6 +79,10 @@ class App {
       const ids = new Set(
         allCountries.filter(c => c.continent === continent).map(c => c.id)
       );
+      // Also include territories that belong to this continent so they aren't greyed out
+      for (const t of territories) {
+        if (t.continent === continent) ids.add(t.id);
+      }
       this.worldMap.setActiveCountryIds(ids);
       this.worldMap.setGravityCenter(CONTINENT_CENTERS[continent] || null);
       this.worldMap.zoomToContinent(continent);
@@ -362,6 +366,10 @@ class App {
       const allContinentIds = new Set(
         allBase.filter(c => c.continent === config.continent).map(c => c.id)
       );
+      // Include ALL territories in this continent (even disabled) so they aren't greyed out
+      for (const t of territories) {
+        if (t.continent === config.continent) allContinentIds.add(t.id);
+      }
       this.worldMap.setActiveCountryIds(allContinentIds);
       // Set gravity center for this continent
       const CONTINENT_CENTERS: Record<string, [number, number]> = {

@@ -80,6 +80,12 @@ export const territories: Territory[] = [
     capital: 'Willemstad', acceptedCapitals: ['willemstad'],
     continent: 'North America', parentId: '528', enabledByDefault: false,
   },
+  {
+    id: '833', alpha2: 'im', name: 'Isle of Man',
+    acceptedNames: ['isle of man', 'mann'],
+    capital: 'Douglas', acceptedCapitals: ['douglas'],
+    continent: 'Europe', parentId: '826', enabledByDefault: false,
+  },
 ];
 
 /** Build a territoryId → parentId map (only for DISABLED territories). */
