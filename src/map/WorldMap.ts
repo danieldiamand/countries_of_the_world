@@ -2,6 +2,7 @@ import * as d3 from 'd3';
 import * as topojson from 'topojson-client';
 import type { Topology, GeometryCollection } from 'topojson-specification';
 import type { FeatureCollection, Feature, Geometry } from 'geojson';
+import { IS_MOBILE, CONTINENT_REGIONS } from '../data/constants';
 
 
 export interface CountryFeature extends Feature<Geometry> {
@@ -72,8 +73,6 @@ const MARKER_IDS_MOBILE = new Set([
   '548',  // Vanuatu (~12189 km²)
 ]);
 
-const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-  (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
 const MARKER_IDS = IS_MOBILE ? MARKER_IDS_MOBILE : MARKER_IDS_DESKTOP;
 
 export class WorldMap {
@@ -666,9 +665,7 @@ export class WorldMap {
   private setupViewportCompensation(): void {
     const vv = window.visualViewport;
     if (!vv) return;
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-      (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
-    if (!isMobile) return;
+    if (!IS_MOBILE) return;
 
     let prevHeight = vv.height;
 
@@ -718,15 +715,7 @@ export class WorldMap {
    * Zoom to a specific continent region.
    */
   zoomToContinent(continent: string): void {
-    const CONTINENT_BOUNDS: Record<string, { center: [number, number]; scale: number }> = {
-      'Africa': { center: [20, 2], scale: 1.8 },
-      'Asia': { center: [90, 30], scale: 1.7 },
-      'Europe': { center: [15, 52], scale: 2.8 },
-      'North America': { center: [-95, 40], scale: 1.9 },
-      'South America': { center: [-60, -15], scale: 1.9 },
-      'Oceania': { center: [140, -25], scale: 2.2 },
-    };
-    const region = CONTINENT_BOUNDS[continent];
+    const region = CONTINENT_REGIONS[continent];
     if (!region) return;
     const projected = this.projection(region.center);
     if (!projected) return;
@@ -755,15 +744,7 @@ export class WorldMap {
    * Offset upward to account for bottom HUD bar. Uses slower animation.
    */
   panToContinent(continent: string, duration: number = 900): void {
-    const CONTINENT_BOUNDS: Record<string, { center: [number, number]; scale: number }> = {
-      'Africa': { center: [20, 2], scale: 1.8 },
-      'Asia': { center: [90, 30], scale: 1.7 },
-      'Europe': { center: [15, 52], scale: 2.8 },
-      'North America': { center: [-95, 40], scale: 1.9 },
-      'South America': { center: [-60, -15], scale: 1.9 },
-      'Oceania': { center: [140, -25], scale: 2.2 },
-    };
-    const region = CONTINENT_BOUNDS[continent];
+    const region = CONTINENT_REGIONS[continent];
     if (!region) return;
     const projected = this.projection(region.center);
     if (!projected) return;
@@ -858,6 +839,17 @@ export class WorldMap {
     ];
   }
 
+  private getCountryFill(state: CountryState, isHovered: boolean, isGreyedOut: boolean): string {
+    if (isGreyedOut) return '#D4CDC5';
+    if (state === 'correct') return MAP_COLORS.correct;
+    if (state === 'hinted') return MAP_COLORS.hinted;
+    if (state === 'selected') return MAP_COLORS.selected;
+    if (state === 'highlighted') return MAP_COLORS.highlighted;
+    if (state === 'missed') return MAP_COLORS.missed;
+    if (isHovered) return MAP_COLORS.hover;
+    return MAP_COLORS.land;
+  }
+
   render(): void {
     if (!this.loaded) return;
     const ctx = this.ctx;
@@ -875,21 +867,12 @@ export class WorldMap {
       const id = feature.id?.toString() || '';
       const state = this.countryStates.get(id) || 'default';
       const isHovered = this.hoveredId === id;
+      const isGreyedOut = this.activeCountryIds !== null && id !== '' && !this.activeCountryIds.has(id);
 
       ctx.beginPath();
       pathGen(feature as any);
 
-      const isGreyedOut = this.activeCountryIds !== null && id !== '' && !this.activeCountryIds.has(id);
-
-      if (isGreyedOut) {
-        ctx.fillStyle = '#D4CDC5';
-      } else if (state === 'correct') ctx.fillStyle = MAP_COLORS.correct;
-      else if (state === 'hinted') ctx.fillStyle = MAP_COLORS.hinted;
-      else if (state === 'selected') ctx.fillStyle = MAP_COLORS.selected;
-      else if (state === 'highlighted') ctx.fillStyle = MAP_COLORS.highlighted;
-      else if (state === 'missed') ctx.fillStyle = MAP_COLORS.missed;
-      else if (isHovered) ctx.fillStyle = MAP_COLORS.hover;
-      else ctx.fillStyle = MAP_COLORS.land;
+      ctx.fillStyle = this.getCountryFill(state, isHovered, isGreyedOut);
       ctx.fill();
 
       ctx.strokeStyle = MAP_COLORS.border;
@@ -917,18 +900,9 @@ export class WorldMap {
         const state = this.countryStates.get(id) || 'default';
         const isHovered = this.hoveredId === id;
 
-        let fillColor: string;
-        if (state === 'correct') fillColor = MAP_COLORS.correct;
-        else if (state === 'hinted') fillColor = MAP_COLORS.hinted;
-        else if (state === 'selected') fillColor = MAP_COLORS.selected;
-        else if (state === 'highlighted') fillColor = MAP_COLORS.highlighted;
-        else if (state === 'missed') fillColor = MAP_COLORS.missed;
-        else if (isHovered) fillColor = MAP_COLORS.hover;
-        else fillColor = MAP_COLORS.land;
-
         ctx.beginPath();
         ctx.arc(centroid[0], centroid[1], dotRadius, 0, Math.PI * 2);
-        ctx.fillStyle = fillColor;
+        ctx.fillStyle = this.getCountryFill(state, isHovered, false);
         ctx.fill();
         ctx.strokeStyle = MAP_COLORS.border;
         ctx.lineWidth = 0.5 / this.currentTransform.k;

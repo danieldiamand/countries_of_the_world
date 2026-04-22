@@ -1,5 +1,39 @@
 import type { Country } from '../data/countries';
 import type { GameConfig, PromptData } from '../engine/types';
+import { IS_MOBILE } from '../data/constants';
+
+/**
+ * Wire a button so it works on both desktop (click) and mobile (touch)
+ * without stealing focus from the text input (which would dismiss the keyboard).
+ *
+ * - mousedown + touchstart: preventDefault keeps focus on the input.
+ * - touchend + click: fires the action.
+ * - If `refocusInput` is provided, the input is re-focused with cursor at end
+ *   after the action runs (keeps mobile keyboard alive).
+ */
+function mobileSafeButton(
+  btn: HTMLElement,
+  action: () => void,
+  refocusInput?: HTMLInputElement,
+): void {
+  btn.addEventListener('mousedown', (e) => e.preventDefault());
+  btn.addEventListener('touchstart', (e) => e.preventDefault());
+
+  const run = (e: Event) => {
+    e.preventDefault();
+    action();
+    if (refocusInput) {
+      requestAnimationFrame(() => {
+        refocusInput.focus();
+        const len = refocusInput.value.length;
+        refocusInput.setSelectionRange(len, len);
+      });
+    }
+  };
+
+  btn.addEventListener('touchend', run);
+  btn.addEventListener('click', run);
+}
 
 export class GameHUD {
   private container: HTMLElement;
@@ -58,8 +92,7 @@ export class GameHUD {
     this.onRevealNearMiss = callbacks.onRevealNearMiss || null;
     this.onZoom = callbacks.onZoom || null;
     this.onFind = callbacks.onFind || null;
-    this.isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-      (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
+    this.isMobile = IS_MOBILE;
 
     this.container = document.createElement('div');
     this.container.className = 'game-hud';
@@ -90,18 +123,7 @@ export class GameHUD {
     const endBtn = document.createElement('button');
     endBtn.className = 'hud-end-btn';
     endBtn.textContent = 'End';
-    // Prevent button from stealing focus (keeps mobile keyboard open)
-    endBtn.addEventListener('mousedown', (e) => e.preventDefault());
-    endBtn.addEventListener('touchstart', (e) => e.preventDefault());
-    endBtn.addEventListener('touchend', (e) => {
-      e.preventDefault();
-      this.onEnd();
-    });
-    endBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.onEnd();
-    });
+    mobileSafeButton(endBtn, () => this.onEnd());
     this.topBar.appendChild(endBtn);
 
 
@@ -116,10 +138,14 @@ export class GameHUD {
     this.promptArea.className = 'prompt-area';
     this.bottomBar.appendChild(this.promptArea);
 
-    // Near-miss bar (clickable)
+    // Near-miss bar (clickable) — listeners wired once, visibility toggled
     this.nearMissBar = document.createElement('div');
     this.nearMissBar.className = 'near-miss-bar';
     this.bottomBar.appendChild(this.nearMissBar);
+    mobileSafeButton(this.nearMissBar, () => {
+      this.onRevealNearMiss?.();
+      this.input.focus();
+    });
 
     // Choices row wrapper (choices + skip button side by side)
     const choicesWrapper = document.createElement('div');
@@ -139,16 +165,7 @@ export class GameHUD {
     this.choiceSkipBtn.textContent = 'Skip';
     this.choiceSkipBtn.title = 'Skip this question';
     this.choiceSkipBtn.style.display = 'none';
-    this.choiceSkipBtn.addEventListener('mousedown', (e) => e.preventDefault());
-    this.choiceSkipBtn.addEventListener('touchstart', (e) => e.preventDefault());
-    this.choiceSkipBtn.addEventListener('touchend', (e) => {
-      e.preventDefault();
-      this.onSkip();
-    });
-    this.choiceSkipBtn.addEventListener('click', (e) => {
-      e.preventDefault();
-      this.onSkip();
-    });
+    mobileSafeButton(this.choiceSkipBtn, () => this.onSkip());
     choicesWrapper.appendChild(this.choiceSkipBtn);
 
     // Input row
@@ -194,28 +211,7 @@ export class GameHUD {
       hintBtn.className = 'hint-btn';
       hintBtn.textContent = 'Hint';
       hintBtn.title = 'Reveal a letter';
-      // Prevent keyboard dismiss on mobile
-      hintBtn.addEventListener('mousedown', (e) => e.preventDefault());
-      hintBtn.addEventListener('touchstart', (e) => e.preventDefault());
-      hintBtn.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        this.onHint();
-        requestAnimationFrame(() => {
-          this.input.focus();
-          const len = this.input.value.length;
-          this.input.setSelectionRange(len, len);
-        });
-      });
-      hintBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        this.onHint();
-        // Restore cursor to end of input without re-triggering keyboard open/close
-        requestAnimationFrame(() => {
-          this.input.focus();
-          const len = this.input.value.length;
-          this.input.setSelectionRange(len, len);
-        });
-      });
+      mobileSafeButton(hintBtn, () => this.onHint(), this.input);
       this.inputRow.appendChild(hintBtn);
     }
 
@@ -225,27 +221,7 @@ export class GameHUD {
       skipBtn.className = 'skip-btn';
       skipBtn.textContent = 'Skip';
       skipBtn.title = 'Skip this country';
-      // Prevent keyboard dismiss on mobile
-      skipBtn.addEventListener('mousedown', (e) => e.preventDefault());
-      skipBtn.addEventListener('touchstart', (e) => e.preventDefault());
-      skipBtn.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        this.onSkip();
-        requestAnimationFrame(() => {
-          this.input.focus();
-          const len = this.input.value.length;
-          this.input.setSelectionRange(len, len);
-        });
-      });
-      skipBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        this.onSkip();
-        requestAnimationFrame(() => {
-          this.input.focus();
-          const len = this.input.value.length;
-          this.input.setSelectionRange(len, len);
-        });
-      });
+      mobileSafeButton(skipBtn, () => this.onSkip(), this.input);
       this.inputRow.appendChild(skipBtn);
     }
 
@@ -255,27 +231,7 @@ export class GameHUD {
       findBtn.className = 'skip-btn';
       findBtn.textContent = 'Find';
       findBtn.title = 'Pan to an unguessed country';
-      // Prevent keyboard dismiss on mobile
-      findBtn.addEventListener('mousedown', (e) => e.preventDefault());
-      findBtn.addEventListener('touchstart', (e) => e.preventDefault());
-      findBtn.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        this.onFind?.();
-        requestAnimationFrame(() => {
-          this.input.focus();
-          const len = this.input.value.length;
-          this.input.setSelectionRange(len, len);
-        });
-      });
-      findBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        this.onFind?.();
-        requestAnimationFrame(() => {
-          this.input.focus();
-          const len = this.input.value.length;
-          this.input.setSelectionRange(len, len);
-        });
-      });
+      mobileSafeButton(findBtn, () => this.onFind?.(), this.input);
       this.inputRow.appendChild(findBtn);
     }
 
@@ -288,20 +244,14 @@ export class GameHUD {
     zoomIn.className = 'zoom-btn';
     zoomIn.textContent = '+';
     zoomIn.title = 'Zoom in';
-    zoomIn.addEventListener('mousedown', (e) => e.preventDefault());
-    zoomIn.addEventListener('touchstart', (e) => e.preventDefault());
-    zoomIn.addEventListener('touchend', (e) => { e.preventDefault(); this.onZoom?.(1.5); });
-    zoomIn.addEventListener('click', (e) => { e.preventDefault(); this.onZoom?.(1.5); });
+    mobileSafeButton(zoomIn, () => this.onZoom?.(1.5));
     zoomControls.appendChild(zoomIn);
 
     const zoomOut = document.createElement('button');
     zoomOut.className = 'zoom-btn';
     zoomOut.textContent = '\u2212';
     zoomOut.title = 'Zoom out';
-    zoomOut.addEventListener('mousedown', (e) => e.preventDefault());
-    zoomOut.addEventListener('touchstart', (e) => e.preventDefault());
-    zoomOut.addEventListener('touchend', (e) => { e.preventDefault(); this.onZoom?.(1 / 1.5); });
-    zoomOut.addEventListener('click', (e) => { e.preventDefault(); this.onZoom?.(1 / 1.5); });
+    mobileSafeButton(zoomOut, () => this.onZoom?.(1 / 1.5));
     zoomControls.appendChild(zoomOut);
 
     // Input events
@@ -509,23 +459,12 @@ export class GameHUD {
       <span class="hint-link">Use hint</span>
     `;
     this.nearMissBar.classList.add('visible');
-    // Whole bar is clickable
     this.nearMissBar.style.cursor = 'pointer';
-    // Prevent keyboard dismiss on mobile
-    this.nearMissBar.addEventListener('mousedown', (e) => e.preventDefault());
-    this.nearMissBar.addEventListener('touchstart', (e) => e.preventDefault());
-    this.nearMissBar.addEventListener('click', this.handleNearMissClick);
   }
-
-  private handleNearMissClick = (): void => {
-    this.onRevealNearMiss?.();
-    this.input.focus();
-  };
 
   hideNearMiss(): void {
     this.nearMissBar.classList.remove('visible');
     this.nearMissBar.style.cursor = '';
-    this.nearMissBar.removeEventListener('click', this.handleNearMissClick);
   }
 
   shakeInput(): void {
@@ -595,9 +534,7 @@ export class GameHUD {
    * D3 zoom still works because it listens for the events regardless of default.
    */
   private setupMobileKeyboardPersistence(): void {
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-      (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
-    if (!isMobile) return;
+    if (!IS_MOBILE) return;
 
     // Find the map canvas
     const canvas = document.querySelector('.world-map-canvas') as HTMLCanvasElement | null;
