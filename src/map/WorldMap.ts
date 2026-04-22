@@ -236,8 +236,8 @@ export class WorldMap {
     // Check marker countries FIRST — their dots sit on top of
     // neighboring country polygons, so they must take priority.
     const k = this.currentTransform.k;
-    if (k >= 3) {
-      const dotScreenRadius = k < 5 ? 5 : 4 * (1 + Math.max(0, k - 5) * 0.08);
+    if (k >= 5) {
+      const dotScreenRadius = 4 * (1 + Math.max(0, k - 5) * 0.08);
       const hitRadiusPx = dotScreenRadius + 14;
       let closest: CountryFeature | null = null;
       let closestDist = Infinity;
@@ -263,7 +263,29 @@ export class WorldMap {
       if (d3.geoContains(feature as any, coords)) return feature;
     }
 
-    return null;
+    // Proximity-based hit: if click landed on ocean (no polygon matched),
+    // find the nearest country centroid within a screen-space radius.
+    // This makes small islands much easier to select without affecting
+    // land border clicks (which are already handled above).
+    const PROXIMITY_RADIUS_PX = 30;
+    let nearestFeature: CountryFeature | null = null;
+    let nearestDist = Infinity;
+    for (const feature of this.features) {
+      const id = feature.id?.toString() || '';
+      if (!id) continue;
+      if (this.activeCountryIds !== null && !this.activeCountryIds.has(id)) continue;
+      const centroid = this.centroids.get(id);
+      if (!centroid) continue;
+      const [sx, sy] = this.currentTransform.apply(centroid);
+      const dx = px - sx;
+      const dy = py - sy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < PROXIMITY_RADIUS_PX && dist < nearestDist) {
+        nearestDist = dist;
+        nearestFeature = feature;
+      }
+    }
+    return nearestFeature;
   }
 
   /**
@@ -644,9 +666,9 @@ export class WorldMap {
       const id = this.lastFlyToId;
       this.viewportCompensationTimer = window.setTimeout(() => {
         if (this.lastFlyToId === id) {
-          this.flyTo(id, 250, true);
+          this.flyTo(id, 400, true);
         }
-      }, 120);
+      }, 250);
     });
   }
 
@@ -856,13 +878,13 @@ export class WorldMap {
     }
 
     // Draw dot markers for small countries.
-    // Show from k >= 3 so they're visible when zooming into a region.
+    // Only show when zoomed in enough (k >= 5) so they don't clutter the zoomed-out view.
     // Dots grow gently with zoom so they're easier to click at high zoom.
-    if (this.currentTransform.k >= 3) {
-      const kVal = this.currentTransform.k;
-      const baseRadius = kVal < 5 ? 5 : 4 * (1 + Math.max(0, kVal - 5) * 0.08);
-      const dotRadius = baseRadius / kVal;
-      const ringWidth = Math.max(1.5, 2.5 / kVal);
+    if (this.currentTransform.k >= 5) {
+      const baseRadius = 4;
+      const growthFactor = 1 + Math.max(0, this.currentTransform.k - 5) * 0.08;
+      const dotScreenRadius = baseRadius * growthFactor;
+      const dotRadius = dotScreenRadius / this.currentTransform.k;
       for (const feature of this.features) {
         const id = feature.id?.toString() || '';
         if (!MARKER_IDS.has(id)) continue;
@@ -875,25 +897,21 @@ export class WorldMap {
         const state = this.countryStates.get(id) || 'default';
         const isHovered = this.hoveredId === id;
 
-        // For active states: white fill + colored ring (clearly visible).
-        // For default: subtle grey dot.
         let fillColor: string;
-        let strokeColor: string;
-        let lw = ringWidth;
-        if (state === 'correct') { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.correct; lw = ringWidth * 1.5; }
-        else if (state === 'hinted') { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.hinted; lw = ringWidth * 1.5; }
-        else if (state === 'selected') { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.selected; lw = ringWidth * 1.5; }
-        else if (state === 'highlighted') { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.highlighted; lw = ringWidth * 1.5; }
-        else if (state === 'missed') { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.missed; lw = ringWidth * 1.5; }
-        else if (isHovered) { fillColor = '#FFFFFF'; strokeColor = MAP_COLORS.text; lw = ringWidth * 1.2; }
-        else { fillColor = MAP_COLORS.border; strokeColor = MAP_COLORS.text; }
+        if (state === 'correct') fillColor = MAP_COLORS.correct;
+        else if (state === 'hinted') fillColor = MAP_COLORS.hinted;
+        else if (state === 'selected') fillColor = MAP_COLORS.selected;
+        else if (state === 'highlighted') fillColor = MAP_COLORS.highlighted;
+        else if (state === 'missed') fillColor = MAP_COLORS.missed;
+        else if (isHovered) fillColor = MAP_COLORS.hover;
+        else fillColor = MAP_COLORS.land;
 
         ctx.beginPath();
         ctx.arc(centroid[0], centroid[1], dotRadius, 0, Math.PI * 2);
         ctx.fillStyle = fillColor;
         ctx.fill();
-        ctx.strokeStyle = strokeColor;
-        ctx.lineWidth = lw;
+        ctx.strokeStyle = MAP_COLORS.border;
+        ctx.lineWidth = 0.5 / this.currentTransform.k;
         ctx.stroke();
       }
     }

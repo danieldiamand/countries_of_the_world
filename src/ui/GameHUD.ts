@@ -93,6 +93,10 @@ export class GameHUD {
     // Prevent button from stealing focus (keeps mobile keyboard open)
     endBtn.addEventListener('mousedown', (e) => e.preventDefault());
     endBtn.addEventListener('touchstart', (e) => e.preventDefault());
+    endBtn.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      this.onEnd();
+    });
     endBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -137,6 +141,10 @@ export class GameHUD {
     this.choiceSkipBtn.style.display = 'none';
     this.choiceSkipBtn.addEventListener('mousedown', (e) => e.preventDefault());
     this.choiceSkipBtn.addEventListener('touchstart', (e) => e.preventDefault());
+    this.choiceSkipBtn.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      this.onSkip();
+    });
     this.choiceSkipBtn.addEventListener('click', (e) => {
       e.preventDefault();
       this.onSkip();
@@ -189,6 +197,15 @@ export class GameHUD {
       // Prevent keyboard dismiss on mobile
       hintBtn.addEventListener('mousedown', (e) => e.preventDefault());
       hintBtn.addEventListener('touchstart', (e) => e.preventDefault());
+      hintBtn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        this.onHint();
+        requestAnimationFrame(() => {
+          this.input.focus();
+          const len = this.input.value.length;
+          this.input.setSelectionRange(len, len);
+        });
+      });
       hintBtn.addEventListener('click', (e) => {
         e.preventDefault();
         this.onHint();
@@ -211,6 +228,15 @@ export class GameHUD {
       // Prevent keyboard dismiss on mobile
       skipBtn.addEventListener('mousedown', (e) => e.preventDefault());
       skipBtn.addEventListener('touchstart', (e) => e.preventDefault());
+      skipBtn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        this.onSkip();
+        requestAnimationFrame(() => {
+          this.input.focus();
+          const len = this.input.value.length;
+          this.input.setSelectionRange(len, len);
+        });
+      });
       skipBtn.addEventListener('click', (e) => {
         e.preventDefault();
         this.onSkip();
@@ -232,6 +258,15 @@ export class GameHUD {
       // Prevent keyboard dismiss on mobile
       findBtn.addEventListener('mousedown', (e) => e.preventDefault());
       findBtn.addEventListener('touchstart', (e) => e.preventDefault());
+      findBtn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        this.onFind?.();
+        requestAnimationFrame(() => {
+          this.input.focus();
+          const len = this.input.value.length;
+          this.input.setSelectionRange(len, len);
+        });
+      });
       findBtn.addEventListener('click', (e) => {
         e.preventDefault();
         this.onFind?.();
@@ -255,6 +290,7 @@ export class GameHUD {
     zoomIn.title = 'Zoom in';
     zoomIn.addEventListener('mousedown', (e) => e.preventDefault());
     zoomIn.addEventListener('touchstart', (e) => e.preventDefault());
+    zoomIn.addEventListener('touchend', (e) => { e.preventDefault(); this.onZoom?.(1.5); });
     zoomIn.addEventListener('click', (e) => { e.preventDefault(); this.onZoom?.(1.5); });
     zoomControls.appendChild(zoomIn);
 
@@ -264,6 +300,7 @@ export class GameHUD {
     zoomOut.title = 'Zoom out';
     zoomOut.addEventListener('mousedown', (e) => e.preventDefault());
     zoomOut.addEventListener('touchstart', (e) => e.preventDefault());
+    zoomOut.addEventListener('touchend', (e) => { e.preventDefault(); this.onZoom?.(1 / 1.5); });
     zoomOut.addEventListener('click', (e) => { e.preventDefault(); this.onZoom?.(1 / 1.5); });
     zoomControls.appendChild(zoomOut);
 
@@ -608,10 +645,14 @@ export class GameHUD {
       this.container.style.right = '0';
       this.container.style.bottom = 'auto';
       this.container.style.height = `${height}px`;
+      // Smooth transitions for keyboard open/close
+      this.container.style.transition = 'top 0.15s ease-out, height 0.15s ease-out';
+      this.container.style.willChange = 'top, height';
 
       // Also reposition toast container to stay near top of visual viewport
       this.toastContainer.style.position = 'fixed';
       this.toastContainer.style.top = `${top + 50}px`;
+      this.toastContainer.style.transition = 'top 0.15s ease-out';
     };
 
     vv.addEventListener('resize', update);
