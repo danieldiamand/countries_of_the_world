@@ -167,7 +167,7 @@ export class GameHUD {
     inputWrapper.appendChild(this.hintOverlay);
 
     this.input = document.createElement('input');
-    this.input.type = 'search';
+    this.input.type = 'text';
     this.input.className = 'guess-input';
     this.input.placeholder = this.getPlaceholder();
     this.input.autocomplete = 'off';
@@ -635,8 +635,10 @@ export class GameHUD {
 
     const vv = window.visualViewport;
 
+    // Use direct style updates (no CSS transitions) to avoid the
+    // stuttering/shaking effect on Android where the keyboard animation
+    // fires many resize events in rapid succession.
     const update = () => {
-      // Size the HUD container to exactly the visual viewport
       const height = vv.height;
       const top = vv.offsetTop;
       this.container.style.position = 'fixed';
@@ -645,14 +647,14 @@ export class GameHUD {
       this.container.style.right = '0';
       this.container.style.bottom = 'auto';
       this.container.style.height = `${height}px`;
-      // Smooth transitions for keyboard open/close
-      this.container.style.transition = 'top 0.15s ease-out, height 0.15s ease-out';
+      // No transitions — instant updates track the keyboard frame-by-frame
+      this.container.style.transition = 'none';
       this.container.style.willChange = 'top, height';
 
       // Also reposition toast container to stay near top of visual viewport
       this.toastContainer.style.position = 'fixed';
       this.toastContainer.style.top = `${top + 50}px`;
-      this.toastContainer.style.transition = 'top 0.15s ease-out';
+      this.toastContainer.style.transition = 'none';
     };
 
     vv.addEventListener('resize', update);

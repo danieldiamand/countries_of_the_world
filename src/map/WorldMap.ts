@@ -27,9 +27,8 @@ export const MAP_COLORS = {
 };
 
 // Countries too small to have clearly visible polygons on a 50m resolution map.
-// We draw dot markers at their centroids so they're findable.
-// Threshold: roughly countries under ~1000 km² (about twice Andorra's size).
-const MARKER_IDS = new Set([
+// Desktop: truly tiny countries that need dots to be findable.
+const MARKER_IDS_DESKTOP = new Set([
   '336',  // Vatican City (~0.44 km²)
   '492',  // Monaco (~2 km²)
   '520',  // Nauru (~21 km²)
@@ -55,6 +54,27 @@ const MARKER_IDS = new Set([
   '296',  // Kiribati (~811 km²)
   '678',  // São Tomé and Príncipe (~964 km²)
 ]);
+
+// Mobile: expanded set including countries that are hard to tap on a small screen.
+const MARKER_IDS_MOBILE = new Set([
+  ...MARKER_IDS_DESKTOP,
+  '020',  // Andorra (~468 km²)
+  '174',  // Comoros (~2235 km²)
+  '882',  // Samoa (~2842 km²)
+  '132',  // Cabo Verde (~4033 km²)
+  '480',  // Mauritius (~2040 km²)
+  '096',  // Brunei (~5765 km²)
+  '780',  // Trinidad and Tobago (~5131 km²)
+  '270',  // Gambia (~11295 km²)
+  '442',  // Luxembourg (~2586 km²)
+  '626',  // Timor-Leste (~14874 km²)
+  '090',  // Solomon Islands (~28896 km²)
+  '548',  // Vanuatu (~12189 km²)
+]);
+
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+  (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
+const MARKER_IDS = IS_MOBILE ? MARKER_IDS_MOBILE : MARKER_IDS_DESKTOP;
 
 export class WorldMap {
   private canvas: HTMLCanvasElement;
@@ -666,9 +686,9 @@ export class WorldMap {
       const id = this.lastFlyToId;
       this.viewportCompensationTimer = window.setTimeout(() => {
         if (this.lastFlyToId === id) {
-          this.flyTo(id, 400, true);
+          this.flyTo(id, 300, true);
         }
-      }, 250);
+      }, 150);
     });
   }
 

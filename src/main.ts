@@ -276,26 +276,27 @@ class App {
         this.gameHUD?.updatePrompt(event.prompt);
 
         const country = event.prompt.country;
+
+        // Clear previous selection highlights for ALL prompt types (keep correct states)
+        for (const c of this.engine.remainingCountries) {
+          const currentState = this.worldMap.getCountryState(c.id);
+          if (currentState === 'selected' || currentState === 'highlighted') {
+            this.worldMap.setCountryState(c.id, 'default');
+          }
+        }
+        // Also clear any territory raw ID highlights
+        for (const tid of this.highlightedTerritoryRawIds) {
+          const currentState = this.worldMap.getCountryState(tid);
+          if (currentState === 'selected' || currentState === 'highlighted') {
+            this.worldMap.setCountryState(tid, 'default');
+          }
+        }
+        this.highlightedTerritoryRawIds.clear();
+
         if (
           country &&
           (event.prompt.type === 'map-highlight' || event.prompt.type === 'click')
         ) {
-          // Clear previous selection highlights (keep correct states)
-          for (const c of this.engine.remainingCountries) {
-            const currentState = this.worldMap.getCountryState(c.id);
-            if (currentState === 'selected' || currentState === 'highlighted') {
-              this.worldMap.setCountryState(c.id, 'default');
-            }
-          }
-          // Also clear any territory raw ID highlights
-          for (const tid of this.highlightedTerritoryRawIds) {
-            const currentState = this.worldMap.getCountryState(tid);
-            if (currentState === 'selected' || currentState === 'highlighted') {
-              this.worldMap.setCountryState(tid, 'default');
-            }
-          }
-          this.highlightedTerritoryRawIds.clear();
-
           // Mode 1 (click & type): highlight auto-advanced country + fly to it
           if (config.mode === 1) {
             this.worldMap.setCountryState(country.id, 'highlighted');
@@ -321,6 +322,10 @@ class App {
           if (config.mode === 5) {
             this.worldMap.flyTo(country.id, 600);
           }
+        }
+
+        if (country && event.prompt.type === 'flag') {
+          this.worldMap.setCountryState(country.id, 'selected');
         }
 
         // For flag/capital quiz sequential modes, restore hints
