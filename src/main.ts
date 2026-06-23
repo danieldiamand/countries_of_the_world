@@ -95,7 +95,8 @@ class App {
 
   /** Shared top-bar slot where the game injects score/timer/Pause/End. */
   private topbarActions!: HTMLElement;
-  /** Left-side icon slot in the top bar (realistic-view toggle + territory gear). */
+  /** Left-side icon slot in the top bar (realistic-view toggle). The gear and
+   *  game actions render on the right (topbarActions); the brand sits centred. */
   private topbarLeft!: HTMLElement;
 
   /** Persistent top bar (always visible): brand title + icon controls + game actions. */
@@ -225,7 +226,7 @@ class App {
     this.startScreen = new StartScreen(this.settings, {
       onStart: (settings) => this.startGame(settings),
       onPreview: (settings) => this.previewSelection(settings),
-    }, this.topbarLeft);
+    }, this.topbarActions);
     this.appEl.appendChild(this.startScreen.element);
 
     // Frame & highlight the saved region immediately (otherwise a restored
