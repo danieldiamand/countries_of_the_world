@@ -16,7 +16,7 @@ export interface QuizSettings {
 }
 
 export interface FlagSettings {
-  answer: 'type' | 'click' | 'both';
+  answer: 'type' | 'click';
   format: 'fixed' | 'adaptive';
   length: QuizLength;
 }
@@ -59,7 +59,7 @@ const DEFAULTS: AppSettings = {
   enabledTerritoryIds: getDefaultEnabledIds(),
   realistic: false,
   quiz: { styles: allStylesEnabled(), format: 'fixed', length: 25 },
-  flag: { answer: 'both', format: 'fixed', length: 25 },
+  flag: { answer: 'type', format: 'fixed', length: 25 },
 };
 
 function normalizeLength(v: unknown, fallback: QuizLength): QuizLength {
@@ -90,9 +90,9 @@ export function loadSettings(): AppSettings {
         format: parsed.quiz?.format ?? DEFAULTS.quiz.format,
         length: normalizeLength(parsed.quiz?.length, DEFAULTS.quiz.length),
       },
-      // Flag mode is always fixed (no adaptive).
+      // Flag mode is always fixed (no adaptive). 'both' was removed → fall back to type.
       flag: {
-        answer: parsed.flag?.answer ?? DEFAULTS.flag.answer,
+        answer: parsed.flag?.answer === 'click' ? 'click' : 'type',
         format: 'fixed',
         length: normalizeLength(parsed.flag?.length, DEFAULTS.flag.length),
       },

@@ -10,6 +10,7 @@ import { StartScreen } from './ui/StartScreen';
 import { GameHUD } from './ui/GameHUD';
 import { QuizScreen } from './ui/QuizScreen';
 import { CountryPopup } from './ui/CountryPopup';
+import { FlagPrompt } from './ui/FlagPrompt';
 import { ResultScreen } from './ui/ResultScreen';
 import { loadSettings, saveSettings, type AppSettings } from './data/settings';
 import { countries as allCountriesData, countryById, type Country } from './data/countries';
@@ -35,6 +36,7 @@ class App {
   private startScreen: StartScreen | null = null;
   private hud: GameHUD | null = null;
   private popup: CountryPopup | null = null;
+  private flagPrompt: FlagPrompt | null = null;
   private resultScreen: ResultScreen | null = null;
   private quizEngine: QuizEngine | null = null;
   private quizScreen: QuizScreen | null = null;
@@ -79,22 +81,46 @@ class App {
     this.globeContainer.addEventListener('mousedown', cancelOnDrag);
     this.globeContainer.addEventListener('touchstart', cancelOnDrag);
 
-    // Persistent top bar (brand title + realistic toggle) + apply saved preference
+    // Persistent top bar (brand title + game actions) + floating realistic toggle
     this.createTopBar();
+    this.createViewToggle();
     this.globe.setRealistic(this.settings.realistic);
+
+    // Flags appear instantly once cached — warm them in the background now.
+    this.preloadFlags();
 
     // Show start screen
     this.showStartScreen();
   }
 
-  /** Shared top-bar slot where the game injects score/timer/End. */
+  /** Shared top-bar slot where the game injects score/timer/Pause/End. */
   private topbarActions!: HTMLElement;
+  /** Left-side icon slot in the top bar (realistic-view toggle + territory gear). */
+  private topbarLeft!: HTMLElement;
 
-  /** Persistent top bar (always visible): realistic toggle, brand title, game actions. */
+  /** Persistent top bar (always visible): brand title + icon controls + game actions. */
   private createTopBar(): void {
     const bar = document.createElement('div');
     bar.className = 'app-topbar';
 
+    const title = document.createElement('span');
+    title.className = 'app-topbar-title';
+    title.textContent = "Diamand's Globe Guesser";
+
+    this.topbarLeft = document.createElement('div');
+    this.topbarLeft.className = 'app-topbar-left';
+
+    this.topbarActions = document.createElement('div');
+    this.topbarActions.className = 'app-topbar-actions';
+
+    bar.appendChild(title);
+    bar.appendChild(this.topbarLeft);
+    bar.appendChild(this.topbarActions);
+    this.appEl.appendChild(bar);
+  }
+
+  /** Realistic-view ("real Earth") toggle — lives in the top bar's left icon slot. */
+  private createViewToggle(): void {
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'view-toggle-btn';
@@ -112,18 +138,75 @@ class App {
       sync();
     });
     sync();
+    this.topbarLeft.appendChild(toggle);
+  }
 
-    const title = document.createElement('span');
-    title.className = 'app-topbar-title';
-    title.textContent = "Diamand's Globe Guesser";
+  /** Warm the browser cache with every flag SVG so popups/lists render instantly. */
+  private preloadFlags(): void {
+    const codes = new Set<string>();
+    for (const c of allCountriesData) if (c.alpha2) codes.add(c.alpha2);
+    for (const t of allTerritoriesData) if (t.alpha2) codes.add(t.alpha2);
+    const warm = () => { for (const a of codes) { const img = new Image(); img.src = `./flags/${a}.svg`; } };
+    if ('requestIdleCallback' in window) {
+      (window as Window & { requestIdleCallback(cb: () => void): void }).requestIdleCallback(warm);
+    } else {
+      setTimeout(warm, 300);
+    }
+  }
 
-    this.topbarActions = document.createElement('div');
-    this.topbarActions.className = 'app-topbar-actions';
+  // ── Pause ──────────────────────────────────────────────
 
-    bar.appendChild(toggle);
-    bar.appendChild(title);
-    bar.appendChild(this.topbarActions);
-    this.appEl.appendChild(bar);
+  private paused = false;
+  private pauseOverlay: HTMLElement | null = null;
+
+  /** Toggle pause: freeze the clock/input and grey out the globe. */
+  private togglePause(): void {
+    if (!this.engine.isRunning) return;
+    this.paused = !this.paused;
+    if (this.paused) {
+      this.engine.pause();
+      this.animation.cancel();
+      this.globe.setDimmed(true);
+      this.showPauseOverlay();
+    } else {
+      this.engine.resume();
+      this.globe.setDimmed(false);
+      this.hidePauseOverlay();
+    }
+    this.flagPrompt?.setPaused(this.paused);
+    this.hud?.setPaused(this.paused);
+  }
+
+  private showPauseOverlay(): void {
+    if (this.pauseOverlay) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'pause-overlay';
+
+    const panel = document.createElement('div');
+    panel.className = 'pause-panel';
+    const h2 = document.createElement('h2');
+    h2.textContent = 'Paused';
+    const p = document.createElement('p');
+    p.textContent = 'Game paused';
+    const resume = document.createElement('button');
+    resume.type = 'button';
+    resume.className = 'pause-resume-btn';
+    resume.textContent = 'Resume';
+    panel.appendChild(h2);
+    panel.appendChild(p);
+    panel.appendChild(resume);
+    overlay.appendChild(panel);
+
+    overlay.addEventListener('click', () => this.togglePause());
+    this.globeContainer.appendChild(overlay);
+    this.pauseOverlay = overlay;
+  }
+
+  private hidePauseOverlay(): void {
+    if (this.pauseOverlay) {
+      this.pauseOverlay.remove();
+      this.pauseOverlay = null;
+    }
   }
 
   // ── Screens ────────────────────────────────────────────
@@ -142,8 +225,12 @@ class App {
     this.startScreen = new StartScreen(this.settings, {
       onStart: (settings) => this.startGame(settings),
       onPreview: (settings) => this.previewSelection(settings),
-    });
+    }, this.topbarLeft);
     this.appEl.appendChild(this.startScreen.element);
+
+    // Frame & highlight the saved region immediately (otherwise a restored
+    // region looks unselected until the user re-picks it).
+    this.previewSelection(this.settings);
   }
 
   /** Highlight & frame the current country selection while on the start screen. */
@@ -177,7 +264,9 @@ class App {
       this.startScreen = null;
     }
 
-    if (settings.mode === 'quiz' || settings.mode === 'flag') {
+    if (settings.mode === 'flag') {
+      this.startFlagMode(settings);
+    } else if (settings.mode === 'quiz') {
       this.startQuizMode(settings);
     } else {
       this.startClassicGame(settings);
@@ -228,6 +317,7 @@ class App {
       onEnd: () => this.engine.endGame(),
       onZoomIn: () => this.interaction.zoomBy(1.5),
       onZoomOut: () => this.interaction.zoomBy(0.67),
+      onTogglePause: () => this.togglePause(),
     }, isFree
       ? {
           modeLabel: 'Free Type',
@@ -282,7 +372,89 @@ class App {
     }
   }
 
-  // ── Quiz & Flag modes ──────────────────────────────────
+  // ── Flag mode ──────────────────────────────────────────
+
+  /** Flag mode runs on the SAME engine/HUD as the classic modes (shared top bar,
+   *  Pause/End, the normal answer box, near-miss, hint, skip). The only extras are
+   *  the flag prompt and, for the click variant, answering by clicking the globe. */
+  private startFlagMode(settings: AppSettings): void {
+    const isClick = settings.flag.answer === 'click';
+
+    const config: GameConfig = {
+      continent: settings.continent,
+      timeLimit: settings.timeLimit,
+      enabledTerritoryIds: new Set(settings.enabledTerritoryIds),
+      countryIds: this.buildPlayCountryIds(settings),
+      limit: settings.flag.length === 'all' ? undefined : settings.flag.length,
+    };
+    this.lastConfig = config;
+
+    // Engine + centroids (same as classic).
+    this.engine = new GameEngine();
+    for (const f of this.globe.getFeatures()) {
+      const id = String(f.id ?? '');
+      const centroid = this.globe.getCentroid(id);
+      if (id && centroid) this.engine.centroids.set(id, centroid);
+    }
+
+    this.engine.on('correct', (e) => this.onCorrect(e));
+    this.engine.on('near-miss', (e) => this.onNearMiss(e));
+    this.engine.on('incorrect', () => this.onIncorrect());
+    this.engine.on('hint', (e) => this.onHint(e));
+    this.engine.on('next', (e) => this.onNext(e));
+    this.engine.on('select', (e) => this.onSelect(e));
+    this.engine.on('skip', () => this.onSkip());
+    this.engine.on('tick', (e) => this.onTick(e));
+    this.engine.on('end', (e) => this.onEnd(e));
+
+    // HUD: type uses the normal answer box; click hides it (answer via the globe).
+    this.hud = new GameHUD(this.appEl, {
+      onGuess: (input) => { this.engine.submitGuess(input); },
+      onHint: () => this.engine.useHint(),
+      onSkip: () => this.engine.skip(),
+      onEnd: () => this.engine.endGame(),
+      onZoomIn: () => this.interaction.zoomBy(1.5),
+      onZoomOut: () => this.interaction.zoomBy(0.67),
+      onTogglePause: () => this.togglePause(),
+    }, {
+      modeLabel: 'Flag',
+      actionsSlot: this.topbarActions,
+      showInput: !isClick,
+      showHint: !isClick,
+      showSkip: true,
+    });
+
+    this.popup = new CountryPopup(this.appEl);
+    this.flagPrompt = new FlagPrompt(this.appEl, isClick ? 'click' : 'type');
+
+    this.engine.start(config);
+    this.hud.updateScore(0, this.engine.total);
+
+    // Territory grouping for hover/click resolution (same as classic).
+    this.featureParentMap = this.engine.featureParentMap;
+    this.parentToChildren = buildParentToChildrenMap(this.featureParentMap);
+    this.setupHoverResolver();
+
+    this.applySelectionToGlobe(settings, config.countryIds!);
+    this.flyToSelection(settings);
+
+    // Kick off the first flag — emits 'select' → presents the target.
+    this.engine.selectRandomUncompleted();
+  }
+
+  /** Show the current target's flag and prime the answer box (Flag mode). */
+  private presentFlagTarget(country: Country): void {
+    this.flagPrompt?.setFlag(country.alpha2, country.name);
+    this.hud?.clearInput();
+    this.hud?.hideNearMiss();
+    this.hud?.setPlaceholder('Name this country...');
+    const hintText = this.engine.getHintText();
+    if (hintText) this.hud?.setHintText(hintText);
+    this.updateGlobeStates();
+    this.hud?.focusInput();
+  }
+
+  // ── Quiz mode ──────────────────────────────────────────
 
   private startQuizMode(settings: AppSettings): void {
     const isFlag = settings.mode === 'flag';
@@ -464,6 +636,9 @@ class App {
   }
 
   private cleanupGame(): void {
+    this.paused = false;
+    this.globe.setDimmed(false);
+    this.hidePauseOverlay();
     if (this.quizScreen) {
       this.quizScreen.destroy();
       this.quizScreen = null;
@@ -476,6 +651,10 @@ class App {
     if (this.popup) {
       this.popup.destroy();
       this.popup = null;
+    }
+    if (this.flagPrompt) {
+      this.flagPrompt.destroy();
+      this.flagPrompt = null;
     }
     if (this.resultScreen) {
       this.resultScreen.destroy();
@@ -509,6 +688,24 @@ class App {
 
     // Free-Type needs no clicking — the player just types.
     if (this.settings.mode === 'free-type') return;
+
+    // Flag mode.
+    if (this.settings.mode === 'flag') {
+      // Type variant answers by typing — ignore globe clicks.
+      if (this.settings.flag.answer !== 'click') return;
+      if (!this.engine.isRunning || this.paused) return;
+      const resolved = this.engine.resolveTerritory(id);
+      const target = this.engine.currentCountry;
+      if (!target) return;
+      if (resolved === target.id) {
+        // Correct country clicked — drive the normal scoring path.
+        this.engine.submitGuess(target.name);
+      } else if (this.engine.activeIds.has(resolved)) {
+        // Wrong in-pool country — brief cue, let them try again.
+        this.flagPrompt?.flashWrong();
+      }
+      return;
+    }
 
     // If game not running, ignore
     if (!this.engine.isRunning) return;
@@ -574,6 +771,12 @@ class App {
   private onNext(e: GameEvent): void {
     if (!e.country) return;
 
+    // Flag mode: show the next flag, don't fly to / reveal the country.
+    if (this.settings.mode === 'flag') {
+      this.presentFlagTarget(e.country);
+      return;
+    }
+
     this.hud?.clearInput();
     this.hud?.hideNearMiss();
     this.hud?.setPlaceholder(`Name this country...`);
@@ -597,6 +800,12 @@ class App {
 
   private onSelect(e: GameEvent): void {
     if (!e.country) return;
+
+    // Flag mode: present the target as a flag (no globe reveal/fly-to).
+    if (this.settings.mode === 'flag') {
+      this.presentFlagTarget(e.country);
+      return;
+    }
 
     // Free-Type "Reveal a country": highlight it and recenter, but stay at
     // continent zoom so neighbours remain visible (don't zoom in hard).
@@ -670,6 +879,10 @@ class App {
   private onEnd(e: GameEvent): void {
     if (!e.gameResult) return;
 
+    this.paused = false;
+    this.globe.setDimmed(false);
+    this.hidePauseOverlay();
+
     // Clean up HUD
     if (this.hud) {
       this.hud.destroy();
@@ -678,6 +891,10 @@ class App {
     if (this.popup) {
       this.popup.destroy();
       this.popup = null;
+    }
+    if (this.flagPrompt) {
+      this.flagPrompt.destroy();
+      this.flagPrompt = null;
     }
 
     this.showResults(e.gameResult);
@@ -712,11 +929,15 @@ class App {
   private updateGlobeStates(): void {
     const states = new Map<string, CountryState>();
 
+    // Flag "click" mode must not highlight the pending target (that would give
+    // away the answer) — only already-guessed countries turn green.
+    const hideCurrent = this.settings.mode === 'flag' && this.settings.flag.answer === 'click';
+
     for (const id of this.engine.activeIds) {
       const state = this.engine.getCountryState(id);
-      if (state !== 'default') {
-        states.set(id, state);
-      }
+      if (state === 'default') continue;
+      if (hideCurrent && (state === 'selected' || state === 'complete-selected')) continue;
+      states.set(id, state);
     }
 
     // Propagate parent state to territory/child features.

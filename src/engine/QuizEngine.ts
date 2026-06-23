@@ -264,6 +264,7 @@ export class QuizEngine {
       timeTaken: elapsed,
       hintsUsed: this.hintsUsed,
       guessedCountries: guessed,
+      hintedCountries: [],
       missedCountries: missed,
     };
 

@@ -67,6 +67,11 @@ export class ResultScreen {
       listsContainer.appendChild(correctList);
     }
 
+    if (result.hintedCountries.length > 0) {
+      const hintedList = this.buildList('Correct with hint', result.hintedCountries, 'hinted');
+      listsContainer.appendChild(hintedList);
+    }
+
     if (result.missedCountries.length > 0) {
       const missedList = this.buildList('Missed', result.missedCountries, 'missed');
       listsContainer.appendChild(missedList);

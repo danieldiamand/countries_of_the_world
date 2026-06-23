@@ -27,6 +27,8 @@ export const GLOBE_COLORS = {
   unselectable: '#C8C0B4',
   graticule: '#D8EEE8',
   globeEdge: 'rgba(160, 152, 140, 0.2)',
+  // Paused: every country rendered in this flat grey (state hidden).
+  dim: '#ACA79D',
   // Realistic ("real Earth") view mode
   realisticOcean: '#1f3b59',
   realisticGraticule: 'rgba(255, 255, 255, 0.07)',
@@ -81,6 +83,17 @@ export class Globe {
   private textureLoading = false;
   private texW = 0;
   private texH = 0;
+  /** Pre-rendered Earth for the current camera (texture reprojected onto the globe
+   *  once per rotation/zoom, then cheaply blitted into each revealed country). */
+  private earthCanvas: HTMLCanvasElement = document.createElement('canvas');
+  private earthCtx: CanvasRenderingContext2D = this.earthCanvas.getContext('2d')!;
+  private earthValid = false;
+  /** While the camera is moving the Earth is reprojected at a coarser grid; it
+   *  settles to the fine grid shortly after motion stops. */
+  private cameraMoving = false;
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Paused: render every country flat-grey, hiding selected/completed state. */
+  private dimmed = false;
 
   // Base scale — fills viewport
   private baseScale = 1;
@@ -246,6 +259,7 @@ export class Globe {
 
   /** Resolve the fill color for a country/marker given its current state + hover. */
   private colorFor(id: string, isHovered: boolean): string {
+    if (this.dimmed) return GLOBE_COLORS.dim; // paused: hide all state
     const isActive = !this.activeCountryIds || this.activeCountryIds.has(id);
     if (!isActive) return GLOBE_COLORS.unselectable;
     switch (this.countryStates.get(id)) {
@@ -271,7 +285,31 @@ export class Globe {
     if (this.realistic === v) return;
     this.realistic = v;
     this.baseValid = false;
+    this.earthValid = false;
     if (v) this.ensureTexture();
+    this.scheduleDraw();
+  }
+
+  /** Invalidate the Earth cache on a camera change, and run the coarse→fine LOD:
+   *  stay coarse while motion continues, then re-render fine ~140ms after it stops. */
+  private markCameraMoved(): void {
+    this.earthValid = false;
+    if (!this.realistic) return;
+    this.cameraMoving = true;
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => {
+      this.cameraMoving = false;
+      this.earthValid = false;
+      this.settleTimer = null;
+      this.scheduleDraw();
+    }, 140);
+  }
+
+  /** Paused: grey out every country (hides selected/completed) until resumed. */
+  setDimmed(v: boolean): void {
+    if (this.dimmed === v) return;
+    this.dimmed = v;
+    this.baseValid = false;
     this.scheduleDraw();
   }
 
@@ -283,13 +321,11 @@ export class Globe {
     this.scheduleDraw();
   }
 
-  private isActive(id: string): boolean {
-    return !this.activeCountryIds || this.activeCountryIds.has(id);
-  }
-
   /** A correctly-guessed country gets the real-earth texture in realistic mode. */
   private isRevealed(id: string): boolean {
-    if (this.revealAll) return this.isActive(id);
+    // Start-screen preview fills in the whole world, regardless of the active
+    // region selection (which only greys countries in the flat/non-realistic view).
+    if (this.revealAll) return true;
     const st = this.countryStates.get(id);
     return st === 'correct' || st === 'complete-selected';
   }
@@ -305,6 +341,7 @@ export class Globe {
       this.texH = img.naturalHeight;
       this.textureLoading = false;
       this.baseValid = false;
+      this.earthValid = false;
       this.draw();
     };
     img.onerror = () => { this.textureLoading = false; };
@@ -313,16 +350,22 @@ export class Globe {
 
   /**
    * Fill the current path for feature `i`. In realistic mode a revealed country
-   * is painted with the real-earth texture; otherwise a flat state color.
-   * Assumes the path is already built on `ctx`.
+   * is filled by blitting the pre-rendered Earth (clipped to the polygon);
+   * otherwise a flat state color. Assumes the path is already built on `ctx`
+   * and that renderEarthCanvas() has run for the current camera.
    */
   private fillFeature(ctx: CanvasRenderingContext2D, i: number, id: string, isHovered: boolean): void {
-    if (this.realistic && this.earthImg && this.isRevealed(id)) {
-      // Land base first, so any uncovered sliver shows terrain — never ocean.
+    void i;
+    if (this.realistic && this.earthImg && !this.dimmed && this.isRevealed(id)) {
+      // Land base so any gap in the reprojection shows terrain — never ocean.
       ctx.fillStyle = GLOBE_COLORS.land;
       ctx.fill();
-      this.paintTexture(ctx, this.features[i]);
+      ctx.save();
+      ctx.clip(); // clip the Earth blit to this country (current path)
+      const dpr = this.dpr;
+      ctx.drawImage(this.earthCanvas, 0, 0, this.canvas.width / dpr, this.canvas.height / dpr);
       if (isHovered) { ctx.fillStyle = 'rgba(255, 255, 255, 0.18)'; ctx.fill(); }
+      ctx.restore();
       return;
     }
     ctx.fillStyle = this.colorFor(id, isHovered);
@@ -330,71 +373,103 @@ export class Globe {
   }
 
   /**
-   * Paint a feature with the equirectangular Earth texture, clipped to the
-   * (already-built) country path. The country's lon/lat bounding box is split
-   * into a grid and each cell is drawn through the *actual* sphere projection
-   * via an affine transform, so the imagery follows the globe's curvature
-   * instead of stretching a single rectangle over the screen bbox (which warps
-   * badly for large / antimeridian-crossing countries like Russia and the USA).
+   * Reproject the equirectangular Earth texture onto the current view ONCE,
+   * into earthCanvas. A regular lon/lat grid is drawn as two affine-mapped
+   * triangles per cell so the imagery follows the sphere; back/edge-facing
+   * cells are culled. Cached until the camera moves — revealing a country does
+   * NOT invalidate it — so per-country fills become a cheap clipped blit and
+   * the cost no longer scales with how many countries are revealed.
    */
-  private paintTexture(ctx: CanvasRenderingContext2D, feat: CountryFeature): void {
-    const img = this.earthImg;
-    if (!img) return;
-    const W = this.texW, H = this.texH, dpr = this.dpr;
+  private renderEarthCanvas(cx: number, cy: number, cz: number): void {
+    if (this.earthValid || !this.earthImg) return;
+    const img = this.earthImg, texW = this.texW, texH = this.texH, dpr = this.dpr;
+    const cw = this.canvas.width, ch = this.canvas.height;
+    if (this.earthCanvas.width !== cw || this.earthCanvas.height !== ch) {
+      this.earthCanvas.width = cw;
+      this.earthCanvas.height = ch;
+    }
+    const ectx = this.earthCtx;
+    ectx.setTransform(1, 0, 0, 1, 0, 0);
+    ectx.clearRect(0, 0, cw, ch);
+
     const proj = this.projection;
+    // LOD: coarse while the camera moves, fine when settled. Kept close (9° vs 5°)
+    // and seam-free (triangles overlap) so the two are barely distinguishable.
+    const D = (this.cameraMoving || this._interacting) ? 9 : 5;
+    const cullDot = Math.cos(Math.PI / 2 + D * DEG2RAD * 1.5); // lenient horizon cull
+    const cssW = cw / dpr, cssH = ch / dpr; // screen-bounds cull (helps when zoomed in)
 
-    const b = d3.geoBounds(feat); // [[lon0,lat0],[lon1,lat1]]; lon0>lon1 ⇒ wraps ±180
-    const lon0 = b[0][0], lat0 = b[0][1], lon1 = b[1][0], lat1 = b[1][1];
-    const lonSpan = lon1 < lon0 ? (lon1 + 360 - lon0) : (lon1 - lon0);
-    const latSpan = lat1 - lat0;
-    if (lonSpan <= 0 || latSpan <= 0) return;
+    for (let lat = -90; lat < 90; lat += D) {
+      const laS = lat, laN = Math.min(90, lat + D);
+      const syN = ((90 - laN) / 180) * texH, syS = ((90 - laS) / 180) * texH;
+      const latMidR = ((laN + laS) / 2) * DEG2RAD;
+      const clatCos = Math.cos(latMidR), clatSin = Math.sin(latMidR);
 
-    // Coarser grid while interacting (cheaper); fine grid when stationary (cached).
-    const div = this._interacting ? 22 : 11;
-    const maxC = this._interacting ? 6 : 18;
-    const maxR = this._interacting ? 4 : 12;
-    const cols = Math.max(1, Math.min(maxC, Math.ceil(lonSpan / div)));
-    const rows = Math.max(1, Math.min(maxR, Math.ceil(latSpan / div)));
+      for (let lon = -180; lon < 180; lon += D) {
+        const loW = lon, loE = lon + D;
+        const lonMidR = ((loW + loE) / 2) * DEG2RAD;
+        const vx = clatCos * Math.cos(lonMidR), vy = clatCos * Math.sin(lonMidR), vz = clatSin;
+        if (vx * cx + vy * cy + vz * cz < cullDot) continue; // behind the horizon
 
-    ctx.save();
-    ctx.clip(); // clip to the country polygon (current path)
+        const sxW = ((loW + 180) / 360) * texW, sxE = ((loE + 180) / 360) * texW;
+        const p00 = proj([loW, laN]), p10 = proj([loE, laN]);
+        const p01 = proj([loW, laS]), p11 = proj([loE, laS]);
 
-    for (let r = 0; r < rows; r++) {
-      const laN = lat1 - (latSpan * r) / rows;       // north edge of row (top)
-      const laS = lat1 - (latSpan * (r + 1)) / rows; // south edge
-      const syN = ((90 - laN) / 180) * H;
-      const syS = ((90 - laS) / 180) * H;
-      const dsy = syS - syN;
-      if (dsy <= 0) continue;
+        // Skip cells whose every projected corner is off-screen.
+        const pts = [p00, p10, p01, p11];
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, any = false;
+        for (const p of pts) {
+          if (!p) continue;
+          any = true;
+          if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0];
+          if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1];
+        }
+        if (!any || maxX < 0 || minX > cssW || maxY < 0 || minY > cssH) continue;
 
-      for (let c = 0; c < cols; c++) {
-        const loW = lon0 + (lonSpan * c) / cols;        // west edge
-        const loE = lon0 + (lonSpan * (c + 1)) / cols;  // east edge
-        const loWw = ((loW + 180) % 360 + 360) % 360 - 180; // wrap into −180..180
-        const loEw = ((loE + 180) % 360 + 360) % 360 - 180;
-
-        const sxW = ((loWw + 180) / 360) * W;
-        const sxE = ((loEw + 180) / 360) * W;
-        const dsx = sxE - sxW;
-        if (dsx <= 0) continue; // cell straddles the texture seam — skip sliver
-
-        const p00 = proj([loWw, laN]); // top-left  (W,N)
-        const p10 = proj([loEw, laN]); // top-right (E,N)
-        const p01 = proj([loWw, laS]); // bottom-left (W,S)
-        if (!p00 || !p10 || !p01) continue; // corner behind the horizon
-
-        // Affine mapping the unit square (0,0)-(1,0)-(0,1) onto p00-p10-p01,
-        // pre-multiplied by dpr (projection outputs CSS px; canvas is dpr-scaled).
-        const a = (p10[0] - p00[0]) * dpr;
-        const bb = (p10[1] - p00[1]) * dpr;
-        const cc = (p01[0] - p00[0]) * dpr;
-        const dd = (p01[1] - p00[1]) * dpr;
-        ctx.setTransform(a, bb, cc, dd, p00[0] * dpr, p00[1] * dpr);
-        ctx.drawImage(img, sxW, syN, dsx, dsy, 0, 0, 1, 1);
+        if (p00 && p10 && p01) this.texTri(ectx, img, dpr, sxW, syN, sxE, syN, sxW, syS, p00, p10, p01);
+        if (p10 && p11 && p01) this.texTri(ectx, img, dpr, sxE, syN, sxE, syS, sxW, syS, p10, p11, p01);
       }
     }
+    this.earthValid = true;
+  }
 
-    ctx.restore(); // pops transform (back to dpr scale) and the country clip
+  /** Affine-map one source-texture triangle onto a screen triangle in earthCanvas (device px). */
+  private texTri(
+    ectx: CanvasRenderingContext2D, img: CanvasImageSource, dpr: number,
+    s0x: number, s0y: number, s1x: number, s1y: number, s2x: number, s2y: number,
+    d0: [number, number], d1: [number, number], d2: [number, number],
+  ): void {
+    const denom = (s1x - s0x) * (s2y - s0y) - (s2x - s0x) * (s1y - s0y);
+    if (denom === 0) return;
+    const a = ((d1[0] - d0[0]) * (s2y - s0y) - (d2[0] - d0[0]) * (s1y - s0y)) / denom;
+    const c = ((d2[0] - d0[0]) * (s1x - s0x) - (d1[0] - d0[0]) * (s2x - s0x)) / denom;
+    const bb = ((d1[1] - d0[1]) * (s2y - s0y) - (d2[1] - d0[1]) * (s1y - s0y)) / denom;
+    const dd = ((d2[1] - d0[1]) * (s1x - s0x) - (d1[1] - d0[1]) * (s2x - s0x)) / denom;
+    const e = d0[0] - a * s0x - c * s0y, f = d0[1] - bb * s0x - dd * s0y;
+    const sxmin = Math.min(s0x, s1x, s2x), symin = Math.min(s0y, s1y, s2y);
+    const sw = Math.max(s0x, s1x, s2x) - sxmin, sh = Math.max(s0y, s1y, s2y) - symin;
+    if (sw <= 0 || sh <= 0) return;
+
+    // Inflate the clip triangle ~0.8px outward from its centroid so adjacent
+    // cells OVERLAP slightly. This hides the anti-aliased edge seams that would
+    // otherwise show the land base as a faint grid over the texture. The draw
+    // affine is unchanged, so the texture stays put — only the clip grows.
+    const gx = (d0[0] + d1[0] + d2[0]) / 3, gy = (d0[1] + d1[1] + d2[1]) / 3;
+    const pad = 0.8;
+    const px0 = d0[0] - gx, py0 = d0[1] - gy, k0 = (Math.hypot(px0, py0) + pad) / (Math.hypot(px0, py0) || 1);
+    const px1 = d1[0] - gx, py1 = d1[1] - gy, k1 = (Math.hypot(px1, py1) + pad) / (Math.hypot(px1, py1) || 1);
+    const px2 = d2[0] - gx, py2 = d2[1] - gy, k2 = (Math.hypot(px2, py2) + pad) / (Math.hypot(px2, py2) || 1);
+
+    ectx.save();
+    ectx.beginPath();
+    ectx.moveTo((gx + px0 * k0) * dpr, (gy + py0 * k0) * dpr);
+    ectx.lineTo((gx + px1 * k1) * dpr, (gy + py1 * k1) * dpr);
+    ectx.lineTo((gx + px2 * k2) * dpr, (gy + py2 * k2) * dpr);
+    ectx.closePath();
+    ectx.clip();
+    ectx.setTransform(a * dpr, bb * dpr, c * dpr, dd * dpr, e * dpr, f * dpr);
+    ectx.drawImage(img, sxmin, symin, sw, sh, sxmin, symin, sw, sh);
+    ectx.restore();
   }
 
   /** Toggle interaction mode — uses lower projection precision for faster rendering. */
@@ -415,6 +490,7 @@ export class Globe {
     this.offscreen.width = this.canvas.width;
     this.offscreen.height = this.canvas.height;
     this.baseValid = false;
+    this.markCameraMoved();
 
     this.baseScale = Math.min(w, h) * 0.45;
     this.projection
@@ -433,6 +509,7 @@ export class Globe {
     this._zoomLevel = Math.max(minZ, Math.min(maxZ, z));
     this.projection.scale(this.baseScale * this._zoomLevel);
     this.baseValid = false;
+    this.markCameraMoved();
     this.scheduleDraw();
   }
 
@@ -445,12 +522,14 @@ export class Globe {
       if (Math.abs(diff) < 0.002) {
         this._zoomLevel = this._smoothZoomTarget;
         this.projection.scale(this.baseScale * this._zoomLevel);
+        this.markCameraMoved();
         this.draw();
         this._smoothZoomRaf = 0;
         return;
       }
       this._zoomLevel += diff * 0.2;
       this.projection.scale(this.baseScale * this._zoomLevel);
+      this.markCameraMoved();
       this.draw();
       this._smoothZoomRaf = requestAnimationFrame(step);
     };
@@ -464,6 +543,7 @@ export class Globe {
   setRotation(r: [number, number, number]): void {
     this.projection.rotate(normalizeRotation(r));
     this.baseValid = false;
+    this.markCameraMoved();
     this.scheduleDraw();
   }
 
@@ -472,6 +552,7 @@ export class Globe {
     this.projection.rotate(normalizeRotation(r));
     this._zoomLevel = Math.max(0.8, Math.min(25, zoom));
     this.projection.scale(this.baseScale * this._zoomLevel);
+    this.markCameraMoved();
     this.drawScheduled = false; // cancel any pending scheduleDraw
     this.draw();
   }
@@ -763,6 +844,13 @@ export class Globe {
     const n = feats.length;
     const ids = this._ids;
     const vxs = this._vx, vys = this._vy, vzs = this._vz, cullCos = this._cullCos;
+
+    // Realistic mode: reproject the Earth once for this camera (cached), then
+    // each revealed country is just a clipped blit from it (see fillFeature).
+    if (this.realistic && this.earthImg && !this.dimmed) {
+      this.renderEarthCanvas(cx, cy, cz);
+      this.path.context(ctx); // renderEarthCanvas leaves projection state alone, but be explicit
+    }
 
     ctx.strokeStyle = GLOBE_COLORS.border;
     ctx.lineWidth = 1.0;

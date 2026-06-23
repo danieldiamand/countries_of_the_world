@@ -117,11 +117,8 @@ html, body {
 }
 
 .territory-gear-btn {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--radius-md);
   border: var(--border-raised);
   background: var(--color-toolbar);
@@ -132,8 +129,6 @@ html, body {
   align-items: center;
   justify-content: center;
   transition: all var(--transition-fast);
-  z-index: 50;
-  pointer-events: auto;
 }
 
 .territory-gear-btn:hover {
@@ -180,22 +175,27 @@ html, body {
   font-weight: 600;
 }
 
+/* Left-side icon controls inside the top bar (realistic-view toggle + gear). */
+.app-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .view-toggle-btn {
-  flex: 0 0 auto;
   width: 30px;
   height: 30px;
   border-radius: var(--radius-md);
   border: var(--border-raised);
   background: var(--color-toolbar);
   color: var(--color-text);
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all var(--transition-fast);
-  pointer-events: auto;
   filter: grayscale(1) opacity(0.65);
 }
 
@@ -473,6 +473,95 @@ html, body {
   color: #fff;
 }
 
+.hud-pause-btn {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  border: var(--border-raised);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.hud-pause-btn:hover {
+  background: var(--color-surface-pressed);
+}
+
+.hud-pause-btn.active {
+  border-style: inset;
+  background: var(--color-selected-light);
+  color: var(--color-selected);
+}
+
+/* Paused: the globe itself greys out (state hidden); a small toolbar-style
+   card sits on top. Matches the app's retro look — no blur, no big modern type. */
+.pause-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(60, 58, 54, 0.18);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.pause-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 26px;
+  background: var(--color-card);
+  border: var(--border-raised);
+  border-radius: var(--radius-lg);
+  text-align: center;
+  user-select: none;
+}
+
+.pause-panel h2 {
+  font-size: 16px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text);
+}
+
+.pause-panel p {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.pause-resume-btn {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 6px 18px;
+  margin-top: 2px;
+  border-radius: var(--radius-md);
+  border: var(--border-raised);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.pause-resume-btn:hover {
+  background: var(--color-surface-pressed);
+}
+
+.pause-resume-btn:active {
+  border-style: inset;
+}
+
 .hud-end-btn:active {
   border-style: inset;
 }
@@ -705,6 +794,97 @@ html, body {
   }
 }
 
+/* ── Flag prompt (Flag mode) ──────────────────────────── */
+.flag-prompt {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  /* Below the HUD input row (20), zoom (15) and popup (25) so those stay usable;
+     above the globe canvas. */
+  z-index: 14;
+}
+.flag-prompt.visible { opacity: 1; }
+.flag-prompt.paused { opacity: 0; }
+.flag-prompt.wrong .flag-prompt-img {
+  border-color: var(--color-missed);
+  animation: flagShake 0.3s ease;
+}
+@keyframes flagShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}
+
+.flag-prompt-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Type: large flag centred over a solid backdrop that hides the globe. */
+.flag-prompt.type {
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg);
+}
+.flag-prompt.type .flag-prompt-card {
+  gap: 16px;
+  margin-bottom: 96px; /* clear the bottom HUD input row */
+}
+.flag-prompt.type .flag-prompt-img {
+  width: min(70vw, 520px);
+  max-height: 46vh;
+  height: auto;
+  object-fit: contain;
+  background: #fff;
+  border: 2px solid var(--color-card-border);
+  border-radius: var(--radius-md);
+  display: block;
+  transition: opacity 0.12s ease;
+}
+.flag-prompt.type .flag-prompt-caption {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+/* Click: compact corner panel; globe stays visible & clickable. */
+.flag-prompt.click {
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 52px 12px 0 0; /* clear the 40px top bar, pin top-right */
+}
+.flag-prompt.click .flag-prompt-card {
+  gap: 6px;
+  background: var(--color-toolbar);
+  border: var(--border-raised);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px 12px;
+}
+.flag-prompt.click .flag-prompt-img {
+  width: 150px;
+  height: 100px;
+  object-fit: cover;
+  background: #fff;
+  border: 2px solid var(--color-card-border);
+  border-radius: 2px;
+  display: block;
+  transition: opacity 0.12s ease;
+}
+.flag-prompt.click .flag-prompt-caption {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 600px) {
+  .flag-prompt.click .flag-prompt-img { width: 104px; height: 70px; }
+  .flag-prompt.type .flag-prompt-card { margin-bottom: 76px; }
+}
+
 /* ── Zoom controls ────────────────────────────────────── */
 .zoom-controls {
   position: absolute;
@@ -861,6 +1041,11 @@ html, body {
 .result-list.correct li {
   background: var(--color-correct-light);
   color: var(--color-correct);
+}
+
+.result-list.hinted li {
+  background: var(--color-hinted-light);
+  color: var(--color-hinted);
 }
 
 .result-list.missed li {

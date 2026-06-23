@@ -44,17 +44,21 @@ const LENGTH_CHOICES: { label: string; value: QuizLength }[] = [
 // Territory category display order
 const CATEGORY_ORDER: TerritoryCategory[] = [
   'Disputed States',
+  'Other Dependencies',
   'US Territories',
   'British Territories',
   'French Territories',
   'Dutch Territories',
-  'Other Territories',
 ];
 
 export class StartScreen {
   private el: HTMLElement;
   private settings: AppSettings;
   private callbacks: StartScreenCallbacks;
+  /** Top-bar left slot to host the territory gear (so it sits inside the bar). */
+  private topbarSlot: HTMLElement | null;
+  /** The territory gear button (lives in the top bar; removed on destroy). */
+  private terrBtn: HTMLElement | null = null;
   private overlayEl: HTMLElement | null = null;
   private quizSection: HTMLElement | null = null;
   private flagSection: HTMLElement | null = null;
@@ -66,12 +70,13 @@ export class StartScreen {
   private countryCheckboxes = new Map<string, HTMLInputElement>();
   private groupCheckboxes = new Map<string, HTMLInputElement>();
 
-  constructor(settings: AppSettings, callbacks: StartScreenCallbacks) {
+  constructor(settings: AppSettings, callbacks: StartScreenCallbacks, topbarSlot?: HTMLElement) {
     this.settings = { ...settings };
     // Quiz mode is currently hidden — fall back to point-and-click if a stale
     // 'quiz' selection was loaded from a previous session.
     if (this.settings.mode === 'quiz') this.settings.mode = 'click-type';
     this.callbacks = callbacks;
+    this.topbarSlot = topbarSlot ?? null;
     this.selectedSet = new Set(settings.selectedCountryIds);
     this.el = document.createElement('div');
     this.el.className = 'start-screen';
@@ -86,11 +91,16 @@ export class StartScreen {
     const panel = document.createElement('div');
     panel.className = 'start-panel';
 
-    // (Territory-settings gear removed — the persistent top bar takes that space.)
-
-    const title = document.createElement('h1');
-    title.textContent = 'Countries of the World';
-    panel.appendChild(title);
+    // Territory-settings gear — sits in the top bar's left icon slot. Lives on the
+    // start screen only, so it's removed during gameplay (see destroy()).
+    const terrBtn = document.createElement('button');
+    terrBtn.className = 'territory-gear-btn';
+    terrBtn.innerHTML = '⚙';
+    terrBtn.title = 'Territory settings';
+    terrBtn.type = 'button';
+    terrBtn.addEventListener('click', () => this.showTerritoryOverlay());
+    this.terrBtn = terrBtn;
+    (this.topbarSlot ?? this.el).appendChild(terrBtn);
 
     // Mode selector
     const modeLabel = document.createElement('label');
@@ -474,10 +484,9 @@ export class StartScreen {
     ansLabel.textContent = 'Answer By';
     const ansOptions = document.createElement('div');
     ansOptions.className = 'time-options';
-    const answers: { label: string; value: 'type' | 'click' | 'both' }[] = [
+    const answers: { label: string; value: 'type' | 'click' }[] = [
       { label: 'Typing', value: 'type' },
       { label: 'Clicking', value: 'click' },
-      { label: 'Both', value: 'both' },
     ];
     for (const a of answers) {
       const btn = document.createElement('button');
@@ -609,6 +618,8 @@ export class StartScreen {
   }
 
   destroy(): void {
+    this.terrBtn?.remove();
+    this.terrBtn = null;
     this.el.remove();
   }
 }

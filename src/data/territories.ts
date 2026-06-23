@@ -11,7 +11,7 @@ export type TerritoryCategory =
   | 'British Territories'
   | 'French Territories'
   | 'Dutch Territories'
-  | 'Other Territories';
+  | 'Other Dependencies';
 
 export interface Territory extends Country {
   parentId: string;          // parent country's numeric ID
@@ -38,6 +38,12 @@ export const territories: Territory[] = [
     acceptedNames: ['somaliland'],
     capital: 'Hargeisa', acceptedCapitals: ['hargeisa', 'hargeysa'],
     continent: 'Africa', parentId: '706', enabledByDefault: false, category: 'Disputed States',
+  },
+  {
+    id: '732', alpha2: 'eh', name: 'Western Sahara',
+    acceptedNames: ['western sahara'],
+    capital: 'Laayoune', acceptedCapitals: ['laayoune', 'el aaiun'],
+    continent: 'Africa', parentId: '504', enabledByDefault: false, category: 'Disputed States',
   },
 
   // ── US Territories ────────────────────────────────────
@@ -174,48 +180,42 @@ export const territories: Territory[] = [
     continent: 'North America', parentId: '528', enabledByDefault: false, category: 'Dutch Territories',
   },
 
-  // ── Other Territories ─────────────────────────────────
+  // ── Other Dependencies ────────────────────────────────
   {
     id: '304', alpha2: 'gl', name: 'Greenland',
     acceptedNames: ['greenland'],
     capital: 'Nuuk', acceptedCapitals: ['nuuk', 'godthab'],
-    continent: 'North America', parentId: '208', enabledByDefault: true, category: 'Other Territories',
+    continent: 'North America', parentId: '208', enabledByDefault: true, category: 'Other Dependencies',
   },
   {
     id: '234', alpha2: 'fo', name: 'Faroe Islands',
     acceptedNames: ['faroe islands', 'faeroe islands', 'faroes'],
     capital: 'Tórshavn', acceptedCapitals: ['torshavn', 'tórshavn'],
-    continent: 'Europe', parentId: '208', enabledByDefault: false, category: 'Other Territories',
+    continent: 'Europe', parentId: '208', enabledByDefault: false, category: 'Other Dependencies',
   },
   {
     id: '344', alpha2: 'hk', name: 'Hong Kong',
     acceptedNames: ['hong kong'],
     capital: 'Hong Kong', acceptedCapitals: ['hong kong'],
-    continent: 'Asia', parentId: '156', enabledByDefault: false, category: 'Other Territories',
+    continent: 'Asia', parentId: '156', enabledByDefault: false, category: 'Other Dependencies',
   },
   {
     id: '446', alpha2: 'mo', name: 'Macao',
     acceptedNames: ['macao', 'macau'],
     capital: 'Macao', acceptedCapitals: ['macao', 'macau'],
-    continent: 'Asia', parentId: '156', enabledByDefault: false, category: 'Other Territories',
-  },
-  {
-    id: '732', alpha2: 'eh', name: 'Western Sahara',
-    acceptedNames: ['western sahara'],
-    capital: 'Laayoune', acceptedCapitals: ['laayoune', 'el aaiun'],
-    continent: 'Africa', parentId: '504', enabledByDefault: false, category: 'Other Territories',
+    continent: 'Asia', parentId: '156', enabledByDefault: false, category: 'Other Dependencies',
   },
   {
     id: '570', alpha2: 'nu', name: 'Niue',
     acceptedNames: ['niue'],
     capital: 'Alofi', acceptedCapitals: ['alofi'],
-    continent: 'Oceania', parentId: '554', enabledByDefault: false, category: 'Other Territories',
+    continent: 'Oceania', parentId: '554', enabledByDefault: false, category: 'Other Dependencies',
   },
   {
     id: '184', alpha2: 'ck', name: 'Cook Islands',
     acceptedNames: ['cook islands'],
     capital: 'Avarua', acceptedCapitals: ['avarua'],
-    continent: 'Oceania', parentId: '554', enabledByDefault: false, category: 'Other Territories',
+    continent: 'Oceania', parentId: '554', enabledByDefault: false, category: 'Other Dependencies',
   },
 ];
 

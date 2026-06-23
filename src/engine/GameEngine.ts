@@ -10,6 +10,8 @@ type Listener = (event: GameEvent) => void;
 export class GameEngine {
   private pool: Country[] = [];
   private guessedIds = new Set<string>();
+  /** Countries guessed after a hint was used for them. */
+  private hintedGuessIds = new Set<string>();
   private hintStates = new Map<string, number>(); // countryId → revealed char count
   private currentId: string | null = null;
   private listeners = new Map<GameEventType, Listener[]>();
@@ -18,6 +20,10 @@ export class GameEngine {
   private startTime = 0;
   private timeLimitMs = 0;
   private running = false;
+  private paused = false;
+  private pauseStart = 0;
+  /** Total ms spent paused — subtracted from elapsed so pausing freezes the clock. */
+  private pausedTotal = 0;
 
   // Selection context
   private selectionHistory: string[] = [];
@@ -50,6 +56,10 @@ export class GameEngine {
 
   get isRunning(): boolean {
     return this.running;
+  }
+
+  get isPaused(): boolean {
+    return this.paused;
   }
 
   /** Returns all country IDs that should be active (in the game pool) */
@@ -96,17 +106,25 @@ export class GameEngine {
       [this.pool[i], this.pool[j]] = [this.pool[j], this.pool[i]];
     }
 
+    // Optional length cap (Flag mode question count).
+    if (config.limit && config.limit > 0 && config.limit < this.pool.length) {
+      this.pool = this.pool.slice(0, config.limit);
+    }
+
     // Build territory parent map (disabled territories + unlisted features)
     this.territoryParentMap = buildFullFeatureParentMap(config.enabledTerritoryIds);
 
     // Reset state
     this.guessedIds.clear();
+    this.hintedGuessIds.clear();
     this.hintStates.clear();
     this.selectionHistory = [];
     this.skipHistory.clear();
     this.hintsUsed = 0;
     this.currentId = null;
     this.running = true;
+    this.paused = false;
+    this.pausedTotal = 0;
     this.startTime = Date.now();
 
     // Timer
@@ -121,10 +139,24 @@ export class GameEngine {
     this.emit('start', {});
   }
 
-  private tick(): void {
-    if (!this.running) return;
+  /** Pause the clock and freeze interaction. */
+  pause(): void {
+    if (!this.running || this.paused) return;
+    this.paused = true;
+    this.pauseStart = Date.now();
+  }
 
-    const elapsed = Date.now() - this.startTime;
+  /** Resume the clock. */
+  resume(): void {
+    if (!this.running || !this.paused) return;
+    this.pausedTotal += Date.now() - this.pauseStart;
+    this.paused = false;
+  }
+
+  private tick(): void {
+    if (!this.running || this.paused) return;
+
+    const elapsed = Date.now() - this.startTime - this.pausedTotal;
 
     if (this.timeLimitMs > 0) {
       const remaining = Math.max(0, this.timeLimitMs - elapsed);
@@ -144,16 +176,18 @@ export class GameEngine {
       this.timerInterval = null;
     }
 
-    const guessed = this.pool.filter(c => this.guessedIds.has(c.id));
+    const guessed = this.pool.filter(c => this.guessedIds.has(c.id) && !this.hintedGuessIds.has(c.id));
+    const hinted = this.pool.filter(c => this.hintedGuessIds.has(c.id));
     const missed = this.pool.filter(c => !this.guessedIds.has(c.id));
-    const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+    const elapsed = Math.floor((Date.now() - this.startTime - this.pausedTotal) / 1000);
 
     const result: GameResult = {
-      correct: guessed.length,
+      correct: this.guessedIds.size,
       total: this.pool.length,
       timeTaken: elapsed,
       hintsUsed: this.hintsUsed,
       guessedCountries: guessed,
+      hintedCountries: hinted,
       missedCountries: missed,
     };
 
@@ -163,7 +197,7 @@ export class GameEngine {
   // ── Selection ──────────────────────────────────────────
 
   selectCountry(id: string, referenceGeo?: [number, number]): void {
-    if (!this.running) return;
+    if (!this.running || this.paused) return;
     this.currentId = id;
     this.referenceGeo = referenceGeo ?? null;
     this.selectionHistory.push(id);
@@ -175,7 +209,7 @@ export class GameEngine {
   // ── Guessing ───────────────────────────────────────────
 
   submitGuess(input: string): GuessResult {
-    if (!this.running || !this.currentId) {
+    if (!this.running || this.paused || !this.currentId) {
       return { status: 'incorrect' };
     }
 
@@ -191,6 +225,8 @@ export class GameEngine {
 
     if (result.status === 'correct') {
       this.guessedIds.add(this.currentId);
+      // If a hint was revealed for this country, it counts as "guessed with hint".
+      if ((this.hintStates.get(this.currentId) ?? 0) > 0) this.hintedGuessIds.add(this.currentId);
       this.skipHistory.clear(); // Reset skip history on correct answer
       this.emit('correct', { country, result });
 
@@ -220,7 +256,7 @@ export class GameEngine {
    * mean more than one country, so we deliberately reveal nothing).
    */
   submitFreeGuess(input: string): GuessResult & { ambiguous?: boolean } {
-    if (!this.running) return { status: 'incorrect' };
+    if (!this.running || this.paused) return { status: 'incorrect' };
 
     const remaining = this.pool.filter(c => !this.guessedIds.has(c.id));
     const result = findFreeMatch(input, remaining);
@@ -245,7 +281,7 @@ export class GameEngine {
    * so the player can see which one to name next. Emits 'select'.
    */
   selectRandomUncompleted(): Country | null {
-    if (!this.running) return null;
+    if (!this.running || this.paused) return null;
     const remaining = this.pool.filter(c => !this.guessedIds.has(c.id));
     if (remaining.length === 0) return null;
     const pick = remaining[Math.floor(Math.random() * remaining.length)];
@@ -257,7 +293,7 @@ export class GameEngine {
   // ── Hints ──────────────────────────────────────────────
 
   useHint(): string | null {
-    if (!this.running || !this.currentId) return null;
+    if (!this.running || this.paused || !this.currentId) return null;
 
     const country = this.pool.find(c => c.id === this.currentId);
     if (!country || this.guessedIds.has(this.currentId)) return null;
@@ -287,7 +323,7 @@ export class GameEngine {
   // ── Skip ───────────────────────────────────────────────
 
   skip(): void {
-    if (!this.running || !this.currentId) return;
+    if (!this.running || this.paused || !this.currentId) return;
 
     addToSkipHistory(this.skipHistory, this.currentId, this.pool.length);
     this.emit('skip', { country: this.currentCountry ?? undefined });
